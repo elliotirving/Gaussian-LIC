@@ -27,7 +27,10 @@ torch.onnx.export(
         "mask": {0: "batch", 2: "height", 3: "width"},
         "pred": {0: "batch", 2: "height", 3: "width"},
     },
-    opset_version=17
+    opset_version=17,
+    dynamo=False,   # torch 2.11 defaults to the dynamo exporter (needs onnxscript
+                    # and changes dynamic-shape semantics); force the legacy
+                    # TorchScript exporter these scripts target.
 )
 
 print("ONNX Export ok.")

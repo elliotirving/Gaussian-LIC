@@ -1,0 +1,50 @@
+# Gaussian-LIC on Jetson AGX Orin — bag-driven (no Coco-LIC).
+#
+#   docker compose -f docker/docker-compose.yml build
+#   # one-time, on the device, after placing Large_300.pth in ../ckpt:
+#   docker compose -f docker/docker-compose.yml run --rm gaussian-lic /usr/local/bin/build_engine.sh
+#   # then run the node:
+#   docker compose -f docker/docker-compose.yml up gaussian-lic
+#
+# A pre-posed bag must publish these topics (remap with `rosbag play ... a:=b`
+# if yours differ):
+#   /pose_for_gs   geometry_msgs/PoseStamped
+#   /points_for_gs sensor_msgs/PointCloud2
+#   /image_for_gs  sensor_msgs/Image
+#   /depth_for_gs  sensor_msgs/Image   (sparse depth; SPNet densifies it)
+
+services:
+  gaussian-lic:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: gaussian-lic:orin
+    # On JetPack the nvidia container runtime is the default; this makes GPU
+    # access explicit and portable across compose setups.
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - DISPLAY=${DISPLAY:-:0}
+      - ROS_MASTER_URI=http://localhost:11311
+    network_mode: host          # share the ROS master with rosbag play on the host
+    ipc: host
+    volumes:
+      # X11 for any RViz / OpenCV windows.
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # Persist results, the SPNet checkpoint/engine, and your bags on the host.
+      - ../result:/root/catkin_gaussian/src/Gaussian-LIC/result
+      - ../ckpt:/root/catkin_gaussian/src/Gaussian-LIC/ckpt
+      # Mount config/ and launch/ so you can add/edit YAMLs and launch files on
+      # the host and pick them up live — no image rebuild needed.
+      - ../config:/root/catkin_gaussian/src/Gaussian-LIC/config
+      - ../launch:/root/catkin_gaussian/src/Gaussian-LIC/launch
+      # read-write so mcap->bag conversion can write the output here too
+      - ${BAGS_DIR:-./bags}:/data/bags
+    # Default for `docker compose up`. Override the launch (and extra roslaunch
+    # args) without editing this file via the LAUNCH env var, e.g.:
+    #   LAUNCH=r3live.launch docker compose ... up gaussian-lic
+    #   LAUNCH="fastlivo2.launch config_path:=config/mine.yaml" docker compose ... up
+    # Or skip this default entirely and run ad-hoc (see README):
+    #   docker compose ... run --rm gaussian-lic roslaunch gaussian_lic r3live.launch
+    command: roslaunch gaussian_lic ${LAUNCH:-fastlivo2.launch}

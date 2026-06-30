@@ -1,0 +1,9 @@
+.git
+.gitignore
+**/.DS_Store
+figure/
+result/
+docker/bags/
+**/*.engine
+**/*.onnx
+ckpt/Large_300.pth

@@ -14,6 +14,7 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 #include "simple_knn.h"
+#include <float.h>   // FLT_MAX — not pulled in transitively under CUDA 12.6
 #include <cub/cub.cuh>
 #include <cub/device/device_radix_sort.cuh>
 #include <vector>
