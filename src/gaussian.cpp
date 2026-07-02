@@ -118,6 +118,27 @@ void Dataset::addFrame(Frame& cur_frame)
     dp_ptr = cv_bridge::toCvCopy(cur_frame.depth_msg, sensor_msgs::image_encodings::TYPE_32FC1);
     cv::Mat depth_map = dp_ptr->image;  // metric float32
 
+    /// Crop then resize to the target training resolution defined in the config.
+    /// crop_y_ (pixels off each of top AND bottom) must be applied BEFORE the
+    /// 0.5x resize so that the y scale factor stays identical to the x scale
+    /// factor, keeping fy exact. Without the crop, a non-integer scale (e.g.
+    /// 640/1296 = 0.4938) introduces ~1.25% error in fy which misplaces 3D
+    /// points throughout the scene. With the crop (1296-16 = 1280 → 640 = 0.5x)
+    /// both axes scale by exactly the same factor and all intrinsics halve cleanly.
+    /// INTER_NEAREST for sparse depth avoids blending metric values with zero holes.
+    if (image_rgb.cols != target_width_ || image_rgb.rows != target_height_)
+    {
+        if (crop_y_ > 0)
+        {
+            int src_h = image_rgb.rows;
+            cv::Rect roi(0, crop_y_, image_rgb.cols, src_h - 2 * crop_y_);
+            image_rgb = image_rgb(roi).clone();
+            depth_map = depth_map(roi).clone();
+        }
+        cv::resize(image_rgb, image_rgb, cv::Size(target_width_, target_height_), 0, 0, cv::INTER_AREA);
+        cv::resize(depth_map, depth_map, cv::Size(target_width_, target_height_), 0, 0, cv::INTER_NEAREST);
+    }
+
     /// pose
     Eigen::Quaterniond q_wc;
     Eigen::Vector3d t_wc;

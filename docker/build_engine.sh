@@ -49,6 +49,7 @@ export_one() {
 
 export_one spnet_512_640.onnx export_onnx_512_640.py
 export_one spnet_480_640.onnx export_onnx_480_640.py
+export_one spnet_640_800.onnx export_onnx_640_800.py   # odin1 half-res (1600x1296 -> 800x640)
 
 # Engine build with the device's trtexec (TensorRT 10 from JetPack).
 TRTEXEC=/usr/src/tensorrt/bin/trtexec
@@ -58,5 +59,7 @@ TRTEXEC=/usr/src/tensorrt/bin/trtexec
   --optShapes=rgb:1x3x512x640,depth:1x1x512x640,mask:1x1x512x640
 "${TRTEXEC}" --onnx=spnet_480_640.onnx --saveEngine=spnet_480_640.engine --fp16 \
   --optShapes=rgb:1x3x480x640,depth:1x1x480x640,mask:1x1x480x640
+"${TRTEXEC}" --onnx=spnet_640_800.onnx --saveEngine=spnet_640_800.engine --fp16 \
+  --optShapes=rgb:1x3x640x800,depth:1x1x640x800,mask:1x1x640x800
 
-echo ">>> Engines built: ${CKPT_DIR}/spnet_{512,480}_640.engine"
+echo ">>> Engines built: ${CKPT_DIR}/spnet_{512_640,480_640,640_800}.engine"

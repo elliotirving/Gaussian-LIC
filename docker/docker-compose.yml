@@ -32,13 +32,11 @@ services:
     volumes:
       # X11 for any RViz / OpenCV windows.
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      # Persist results, the SPNet checkpoint/engine, and your bags on the host.
-      - ../result:/root/catkin_gaussian/src/Gaussian-LIC/result
-      - ../ckpt:/root/catkin_gaussian/src/Gaussian-LIC/ckpt
-      # Mount config/ and launch/ so you can add/edit YAMLs and launch files on
-      # the host and pick them up live — no image rebuild needed.
-      - ../config:/root/catkin_gaussian/src/Gaussian-LIC/config
-      - ../launch:/root/catkin_gaussian/src/Gaussian-LIC/launch
+      # Mount the entire project so edits on the host (src/, docker/, ckpt/,
+      # config/, launch/, ...) are immediately visible inside the container
+      # without rebuilding the image. build/ and devel/ live one level up at
+      # /root/catkin_gaussian/{build,devel}/ so they are unaffected by this mount.
+      - ..:/root/catkin_gaussian/src/Gaussian-LIC
       # read-write so mcap->bag conversion can write the output here too
       - ${BAGS_DIR:-./bags}:/data/bags
     # Default for `docker compose up`. Override the launch (and extra roslaunch

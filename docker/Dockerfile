@@ -211,10 +211,8 @@ RUN git clone --branch noetic https://github.com/ros-perception/vision_opencv.gi
         /root/catkin_gaussian/src/vision_opencv
 
 COPY docker/build_ws.sh /usr/local/bin/build_ws.sh
-RUN chmod +x /usr/local/bin/build_ws.sh && /usr/local/bin/build_ws.sh
-
 COPY docker/build_engine.sh /usr/local/bin/build_engine.sh
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/build_engine.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/build_ws.sh /usr/local/bin/build_engine.sh /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["bash"]

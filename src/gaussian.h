@@ -57,6 +57,7 @@ public:
         select_every_k_frame_(prm.select_every_k_frame),
         depth_completion_(prm.depth_completion),
         patch_size_(prm.patch_size), max_depth_(prm.max_depth),
+        target_width_(prm.width), target_height_(prm.height), crop_y_(prm.crop_y),
         all_frame_num_(0), is_keyframe_current_(false),
         depth_completer_(prm.engine_path, prm.width, prm.height) {}
         
@@ -73,6 +74,9 @@ public:
     int patch_size_;
     double max_depth_;
 
+    int target_width_;   // config resolution; raw frames are resized to this in addFrame()
+    int target_height_;
+    int crop_y_;         // pixels cropped from top AND bottom before resize (keeps scale uniform)
 
     int all_frame_num_;
     bool is_keyframe_current_;

@@ -164,3 +164,16 @@ round or two of debugging on the actual device:
 AGX Orin 64GB will run this, but expect throughput well below a 3090/4090; it is
 not guaranteed to keep up with the paper's real-time numbers. Play bags at a
 reduced rate (`rosbag play -r 0.5 …`) if mapping falls behind.
+
+
+## Converting ROS2 MCAP to ROS1 file
+In container:
+micromamba run -n ros rosbags-convert --src name.mcap --dst name.bag
+(DOES NOT WORK: odom remains navmsg, GLIC2 expects geom/posestamped)
+
+Check:
+micromamba run -n ros rosbag info test_convert.bag 
+
+micromamba run -n ros python3 docker/mcap_to_glic_bag.py \
+      /data/bags/jetfast_arche_bags/day2/mcap/arche_truck.mcap \
+      /data/bags/arche_truck_glic.bag

@@ -1,0 +1,46 @@
+# odin1 half-resolution. Raw frames are 1600x1296; Dataset::addFrame crops then
+# resizes each incoming RGB/depth frame to the width/height below.
+#
+# SPNet requires both dims divisible by 16 (4 effective stride-2 stages).
+# 1296/2=648 fails because 648/8=81 is odd. Fix: crop 8px from top AND bottom
+# (1296-16=1280), then resize at exactly 0.5x -> 640. Both axes now scale by
+# exactly 0.5 so all intrinsics halve cleanly — no fy/cy distortion.
+#
+#   full (1600x1296): fx 731.65365411  fy 731.47500576  cx 824.87886602  cy 715.18588323
+#   crop top+bot 8px: cy_src = 715.186 - 8 = 707.186
+#   scale 0.5x:       fx/2, fy/2, cx/2, cy_cropped/2
+crop_y: 8
+width: 800
+height: 640
+fx: 365.82682705
+fy: 365.73750288
+cx: 412.43943301
+cy: 353.59294161
+
+select_every_k_frame: 5
+depth_completion: true
+patch_size: 10
+max_depth: 45  # odin1 is an outdoor scene (matches its z_far)
+
+sh_degree: 3
+white_background: false  # no adjustment needed
+random_background: false  # no adjustment needed
+convert_SHs_python: false  # no adjustment needed
+compute_cov3D_python: false  # no adjustment needed
+lambda_erank: 0  # no adjustment needed
+scaling_scale: 1  # the larger value tends to yield less Gaussians
+
+position_lr: 0.00016
+feature_lr: 0.0050  # the larger value tends to yield better performance
+opacity_lr: 0.05
+scaling_lr: 0.005  # the larger value tends to yield less Gaussians
+rotation_lr: 0.001
+lambda_dssim: 0.2
+optimize_depth: true
+lambda_depth: 0.005
+iteration_decay: false
+
+apply_exposure: false
+exposure_lr: 0.001
+skybox_points_num: 0  # 100000
+skybox_radius: 1000
