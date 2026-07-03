@@ -44,7 +44,7 @@ void pointCallback(const sensor_msgs::PointCloud2ConstPtr& point_msg)
 {
     m_buf.lock();
     point_buf.push(point_msg);
-    last_point_time = ros::Time::now().toSec();
+    last_point_time = ros::WallTime::now().toSec();
     m_buf.unlock();
 }
 
@@ -227,6 +227,7 @@ void mapping(const YAML::Node& node, const std::string& result_path, const std::
     gaussians->saveMap(result_path);
 
     std::cout << "\n\n😋 Gaussian-LIC Done!\n\n\n";
+    ros::shutdown();
 }
 
 int main(int argc, char** argv)
@@ -252,15 +253,13 @@ int main(int argc, char** argv)
 
     std::thread mapping_process(mapping, config_node, result_path, lpips_path);
     std::thread monitor_thread([](){
-        while (!exit_flag) 
+        while (!exit_flag)
         {
-            double now = ros::Time::now().toSec();
-            if (gaussians_initialized && (now - last_point_time > 5.0)) 
+            double now = ros::WallTime::now().toSec();
+            if (gaussians_initialized && (now - last_point_time > 5.0))
             {
-                m_buf.lock();
-                if (point_buf.empty()) exit_flag = true;
-                m_buf.unlock();
-            } 
+                exit_flag = true;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
     });
