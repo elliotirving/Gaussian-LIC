@@ -150,12 +150,13 @@ void Dataset::addFrame(Frame& cur_frame)
     /// point
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
     pcl::fromROSMsg(*cur_frame.point_msg, *cloud);
-    for (const auto& pt : cloud->points)
+    Eigen::Matrix3d R_cw = q_wc.toRotationMatrix().transpose();
+    Eigen::Vector3d t_cw = - R_cw * t_wc;
+    for (size_t i = 0; i < cloud->points.size(); i += point_stride_)
     {
+        const auto& pt = cloud->points[i];
         pointcloud_.emplace_back(Eigen::Vector3d(pt.x, pt.y, pt.z));
         pointcolor_.emplace_back(Eigen::Vector3d(pt.r, pt.g, pt.b) / 255.0);
-        Eigen::Matrix3d R_cw = q_wc.toRotationMatrix().transpose();
-        Eigen::Vector3d t_cw = - R_cw * t_wc;
         Eigen::Vector3d pt_c = R_cw * pointcloud_.back() + t_cw;
         assert(pt_c(2) > 0);
         pointdepth_.push_back(static_cast<float>(pt_c(2)));

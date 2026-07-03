@@ -55,6 +55,7 @@ public:
     Dataset(const Params& prm)
       : fx_(prm.fx), fy_(prm.fy), cx_(prm.cx), cy_(prm.cy),
         select_every_k_frame_(prm.select_every_k_frame),
+        point_stride_(prm.point_stride),
         depth_completion_(prm.depth_completion),
         patch_size_(prm.patch_size), max_depth_(prm.max_depth),
         target_width_(prm.width), target_height_(prm.height), crop_y_(prm.crop_y),
@@ -70,6 +71,7 @@ public:
     double cy_;
 
     int select_every_k_frame_;
+    int point_stride_;
     bool depth_completion_;
     int patch_size_;
     double max_depth_;

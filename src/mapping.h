@@ -64,6 +64,7 @@ public:
         cy = node["cy"].as<double>();
 
         select_every_k_frame = node["select_every_k_frame"].as<int>();
+        point_stride = node["point_stride"] ? node["point_stride"].as<int>() : 1;
         depth_completion = node["depth_completion"].as<bool>();
         patch_size = node["patch_size"].as<int>();
         max_depth = node["max_depth"].as<double>();
@@ -106,6 +107,7 @@ public:
     double cy;
 
     int select_every_k_frame;
+    int point_stride;
     bool depth_completion;
     int patch_size;
     double max_depth;
