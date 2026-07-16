@@ -204,9 +204,18 @@ public:
     double t_tocuda_;
 };
 
+/// Averaged visual-quality metrics already computed and printed by
+/// evaluateVisualQuality(). Returned only so the final summary values can be
+/// reused verbatim (e.g. for the spreadsheet rows) without recomputation.
+struct VisualQualityMetrics
+{
+    double train_psnr = 0.0, train_ssim = 0.0, train_lpips = 0.0;
+    double test_psnr  = 0.0, test_ssim  = 0.0, test_lpips  = 0.0;
+};
+
 void extend(const std::shared_ptr<Dataset>& dataset, std::shared_ptr<GaussianModel>& pc);
 double optimize(const std::shared_ptr<Dataset>& dataset, std::shared_ptr<GaussianModel>& pc);
-void evaluateVisualQuality(const std::shared_ptr<Dataset>& dataset, 
+VisualQualityMetrics evaluateVisualQuality(const std::shared_ptr<Dataset>& dataset,
                            std::shared_ptr<GaussianModel>& pc,
                            const std::string& result_path,
                            const std::string& lpips_path);

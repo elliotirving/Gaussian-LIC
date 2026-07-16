@@ -896,11 +896,12 @@ double optimize(const std::shared_ptr<Dataset>& dataset, std::shared_ptr<Gaussia
     return updated_num / opt_list.size();
 }
 
-void evaluateVisualQuality(const std::shared_ptr<Dataset>& dataset, 
+VisualQualityMetrics evaluateVisualQuality(const std::shared_ptr<Dataset>& dataset,
                            std::shared_ptr<GaussianModel>& pc,
                            const std::string& result_path,
                            const std::string& lpips_path)
 {
+    VisualQualityMetrics metrics;
     std::cout << "\n     🎉 Evaluate Visual Quality 🎉\n";
     std::cout << "\n        [Number of Final Gaussians] " << pc->getXYZ().size(0) << std::endl;
 
@@ -976,6 +977,7 @@ void evaluateVisualQuality(const std::shared_ptr<Dataset>& dataset,
         std::cout << std::fixed << std::setprecision(2) << "        [Training View PSNR] " << psnrs << std::endl;
         std::cout << std::fixed << std::setprecision(3) << "        [Training View SSIM] " << ssims << std::endl;
         std::cout << std::fixed << std::setprecision(3) << "        [Training View LPIPS] " << lpipss << std::endl;
+        metrics.train_psnr = psnrs; metrics.train_ssim = ssims; metrics.train_lpips = lpipss;
     }
     {
         double psnrs = 0;
@@ -1025,5 +1027,7 @@ void evaluateVisualQuality(const std::shared_ptr<Dataset>& dataset,
         std::cout << std::fixed << std::setprecision(2) << "        [In-Sequence Novel View PSNR] " << psnrs << std::endl;
         std::cout << std::fixed << std::setprecision(3) << "        [In-Sequence Novel View SSIM] " << ssims << std::endl;
         std::cout << std::fixed << std::setprecision(3) << "        [In-Sequence Novel View LPIPS] " << lpipss << std::endl;
+        metrics.test_psnr = psnrs; metrics.test_ssim = ssims; metrics.test_lpips = lpipss;
     }
+    return metrics;
 }

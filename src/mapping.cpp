@@ -150,6 +150,68 @@ bool getAlignedData(Frame& cur_frame)
     return true;
 }
 
+/// Prints two tab-separated rows for copy-pasting into the "Runs" and
+/// "Evaluations" tracking spreadsheets. This is pure terminal formatting of
+/// values already computed and printed by the runtime-statistics and
+/// visual-quality summaries above; it performs no training/eval/timing work
+/// and cannot affect numerical results. Stream format state is saved and
+/// restored so nothing downstream is perturbed. Unknown metadata (experiment
+/// id, dataset, sequence, platform, notes) and the hardcoded iterations/KF are
+/// left as placeholders; depth-error columns are left empty (not measured).
+static void printSpreadsheetRows(const std::shared_ptr<GaussianModel>& gaussians,
+                                 const std::shared_ptr<Dataset>& dataset,
+                                 double total_extending_time,
+                                 const VisualQualityMetrics& metrics)
+{
+    const char TAB = '\t';
+    std::ostream& os = std::cout;
+    const std::ios_base::fmtflags saved_flags = os.flags();
+    const std::streamsize saved_precision = os.precision();
+
+    // Runs sheet columns: ID, Map Method, Dataset, Sequence, Training platform,
+    // Iterations/KF, Extra downsample stride, SH Degree, Final Gauss, Fwd (s),
+    // Backward (s), Step (s), CPU-GPU (s), Extending (s), Notes.
+    os << "\n===== COPY TO RUNS SHEET =====\n";
+    os << "<experiment_id>" << TAB          // ID
+       << "glic2" << TAB                    // Map Method
+       << "<dataset>" << TAB                // Dataset
+       << "<sequence>" << TAB               // Sequence
+       << "<platform>" << TAB               // Training platform
+       << "<iterations_per_keyframe>" << TAB // Iterations/KF (hardcoded local in optimize())
+       << dataset->point_stride_ << TAB     // Extra downsample stride (config point_stride)
+       << gaussians->sh_degree_ << TAB      // SH Degree (model/config)
+       << gaussians->getXYZ().size(0) << TAB; // Final Gauss
+    os << std::fixed << std::setprecision(2)
+       << gaussians->t_forward_ << TAB      // Fwd (s)
+       << gaussians->t_backward_ << TAB     // Backward (s)
+       << gaussians->t_step_ << TAB         // Step (s)
+       << gaussians->t_tocuda_ << TAB       // CPU-GPU (s)
+       << total_extending_time << TAB;      // Extending (s)
+    os << "\n";                             // Notes (empty)
+
+    // Evaluations sheet columns: Experiment, Evaluator/renderer, Test PSNR,
+    // Test SSIM, Test LPIPS, Test Depth MAE, Test Depth RMSE, Train PSNR,
+    // Train SSIM, Train LPIPS, Train Depth MAE, Train Depth RMSE. Test metrics
+    // are the In-Sequence Novel View results; train are the Training View
+    // results. Depth-error columns are unmeasured and left empty.
+    os << "\n===== COPY TO EVALUATIONS SHEET =====\n";
+    os << "<experiment_id>" << TAB          // Experiment
+       << "GLIC2" << TAB;                   // Evaluator/renderer
+    os << std::fixed << std::setprecision(2) << metrics.test_psnr << TAB;
+    os << std::setprecision(3) << metrics.test_ssim << TAB
+       << metrics.test_lpips << TAB
+       << TAB                               // Test Depth MAE (empty)
+       << TAB;                              // Test Depth RMSE (empty)
+    os << std::setprecision(2) << metrics.train_psnr << TAB;
+    os << std::setprecision(3) << metrics.train_ssim << TAB
+       << metrics.train_lpips << TAB
+       << TAB                               // Train Depth MAE (empty)
+       << "\n";                             // Train Depth RMSE (empty)
+
+    os.flags(saved_flags);
+    os.precision(saved_precision);
+}
+
 void mapping(const YAML::Node& node, const std::string& result_path, const std::string& lpips_path)
 {
     torch::jit::setGraphExecutorOptimize(false);
@@ -242,7 +304,8 @@ void mapping(const YAML::Node& node, const std::string& result_path, const std::
     std::cout << std::fixed << std::setprecision(2) << "        [Total Adding Time] " << total_adding_time << "s" << std::endl;
     std::cout << std::fixed << std::setprecision(2) << "        [Total Extending Time] " << total_extending_time << "s" << std::endl;
     torch::NoGradGuard no_grad;
-    evaluateVisualQuality(dataset, gaussians, result_path, lpips_path);
+    VisualQualityMetrics metrics = evaluateVisualQuality(dataset, gaussians, result_path, lpips_path);
+    printSpreadsheetRows(gaussians, dataset, total_extending_time, metrics);
     gaussians->saveMap(result_path);
 
     std::cout << "\n\n😋 Gaussian-LIC Done!\n\n\n";
