@@ -76,10 +76,31 @@ docker compose -f docker/docker-compose.yml run --rm \
 This writes `ckpt/spnet_512_640.engine` and `ckpt/spnet_480_640.engine` (the
 `ckpt/` dir is a host volume, so they persist).
 
-## Run (bag-driven)
+## Run
 
-`gs_mapping` is fully decoupled from Coco-LIC — it only subscribes to four
-standard topics. Your bag must publish them (remap if names differ):
+The workflow is: **bring up one idle container, then exec into it and do
+everything by hand** — convert bags, launch the node, play bags. `up` does *not*
+auto-launch anything.
+
+Set `DATA_DIR` in [`docker/.env`](.env) to your host data folder (default
+`/home/rsl/data`); it is mounted read-write at `/data` inside the container.
+
+```bash
+xhost +local:root                                        # allow GUI windows (once)
+
+# Start the idle container (detached) and open a shell in it. The shell has the
+# ROS env ready automatically (conda `ros` activated, workspace sourced,
+# LD_LIBRARY_PATH set) — no wrapper needed.
+docker compose -f docker/docker-compose.yml up -d gaussian-lic
+docker compose -f docker/docker-compose.yml exec gaussian-lic bash
+```
+
+Everything below runs **inside that shell** (open more with the same `exec`
+command — `network_mode: host` means they all share one ROS master, so the node
+and `rosbag play` can live in separate shells).
+
+**1. Convert your data to the Gaussian-LIC topic contract** (once per bag). The
+node only subscribes to four topics — your data must publish them:
 
 | Topic | Type |
 |---|---|
@@ -88,47 +109,39 @@ standard topics. Your bag must publish them (remap if names differ):
 | `/image_for_gs` | `sensor_msgs/Image` |
 | `/depth_for_gs` | `sensor_msgs/Image` (sparse depth; SPNet densifies it) |
 
-The Orin host has no ROS1, so **`rosbag play` runs inside the container too**
-(`network_mode: host` lets a second shell share the ROS master).
-
 ```bash
-xhost +local:root                                   # allow GUI windows
+cd /root/catkin_gaussian/src/Gaussian-LIC       # where the scripts live
 
-# Terminal 1 — ROS master + mapping node (waits for "😋 Gaussian-LIC Ready!"):
-docker compose -f docker/docker-compose.yml up gaussian-lic
+# ROS2 .mcap  ->  ROS1 .bag  (edit the SRC topic names at the top of the script):
+python3 docker/mcap_to_glic_bag.py /data/odin1/your.mcap /data/odin1/your_glic.bag
 
-# Terminal 2 — exec into the SAME container and play the bag:
-docker compose -f docker/docker-compose.yml exec gaussian-lic bash
-rosbag play /data/bags/your.bag
-#   …or with remapping (renames topics only, not types):
-# rosbag play /data/bags/your.bag /your_pose:=/pose_for_gs /your_cloud:=/points_for_gs \
-#                                 /your_img:=/image_for_gs /your_depth:=/depth_for_gs
+# already a ROS1 .bag, just needs topic/type remap (odin1 layout):
+python3 docker/convert_bag_odin1.py /data/odin1/your.bag /data/odin1/your_glic.bag
 ```
 
-Results are saved under `result/` on the host.
-
-### Choosing the launch / config
-
-`command:` in compose is only the **default** for `up`; the entrypoint runs
-whatever args you give it. Three ways to pick a launch + config (`config/` and
-`launch/` are host-mounted, so edits/new files need no rebuild):
+**2. Launch the mapping node** (waits for "😋 Gaussian-LIC Ready!"):
 
 ```bash
-# 1) Override the default for `up` via the LAUNCH env var:
-LAUNCH=r3live.launch docker compose -f docker/docker-compose.yml up gaussian-lic
-
-# 2) Same, but also pass extra roslaunch args (e.g. a custom config):
-LAUNCH="fastlivo2.launch config_path:=config/mine.yaml" \
-  docker compose -f docker/docker-compose.yml up gaussian-lic
-
-# 3) Ad-hoc one-off, ignoring the default entirely:
-docker compose -f docker/docker-compose.yml run --rm gaussian-lic \
-  roslaunch gaussian_lic r3live.launch config_path:=config/mine.yaml
+roslaunch gaussian_lic fastlivo2.launch
+#   pick another launch/config (both host-mounted, no rebuild to edit):
+# roslaunch gaussian_lic r3live.launch config_path:=config/mine.yaml
 ```
 
-Each `launch/*.launch` defaults `config_path` to its matching `config/*.yaml`
-(camera intrinsics, topics, etc.). For a custom dataset, drop your YAML in
-`config/` on the host and point `config_path:=config/yourfile.yaml` at it.
+**3. In a second shell, play the converted bag:**
+
+```bash
+docker compose -f docker/docker-compose.yml exec gaussian-lic bash   # (on the host)
+rosbag play /data/odin1/your_glic.bag                                 # (in the shell)
+```
+
+Results are saved under `result/` on the host. Each `launch/*.launch` defaults
+`config_path` to its matching `config/*.yaml` (camera intrinsics, topics, ...);
+for a custom dataset drop a YAML in `config/` and pass
+`config_path:=config/yourfile.yaml`.
+
+> Prefer a one-shot node run without the idle container? `docker compose -f
+> docker/docker-compose.yml run --rm gaussian-lic roslaunch gaussian_lic
+> fastlivo2.launch` runs it in the foreground and cleans up on Ctrl-C.
 
 ## Known integration risks (expect on-device iteration here)
 

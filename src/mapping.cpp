@@ -164,13 +164,32 @@ void mapping(const YAML::Node& node, const std::string& result_path, const std::
     double total_extending_time = 0;
 
     Frame cur_frame;
-    while (!exit_flag)
+    while (true)
     {
         /// [1] data alignment
         m_buf.lock();
         bool align_flag = getAlignedData(cur_frame);
         m_buf.unlock();
-        if (!align_flag) continue;
+        if (!align_flag)
+        {
+            /// The bag has stopped and no aligned frame could be formed.
+            /// getAlignedData() only returns false *without consuming* a
+            /// message when one of the buffers is empty; every other false
+            /// path pops a stale point (i.e. makes progress). So once any
+            /// buffer is empty, no further aligned frame can ever be built.
+            /// This drains the backlog left after the bag ends and also
+            /// covers the case of a leftover LiDAR scan whose matching
+            /// pose/image never arrived because recording was cut short.
+            if (exit_flag)
+            {
+                m_buf.lock();
+                bool exhausted = point_buf.empty() || pose_buf.empty()
+                              || image_buf.empty() || depth_buf.empty();
+                m_buf.unlock();
+                if (exhausted) break;
+            }
+            continue;
+        }
         
         /// [2] add every frame
         t_start = std::chrono::steady_clock::now();

@@ -1,10 +1,15 @@
 # Gaussian-LIC on Jetson AGX Orin — bag-driven (no Coco-LIC).
 #
 #   docker compose -f docker/docker-compose.yml build
+#   # one-time, on the device: build the catkin workspace (persists in the
+#   # catkin_build/catkin_devel volumes, so it survives container recreation
+#   # and re-running this after a source edit is a fast incremental rebuild):
+#   docker compose -f docker/docker-compose.yml run --rm gaussian-lic /usr/local/bin/build_ws.sh
 #   # one-time, on the device, after placing Large_300.pth in ../ckpt:
 #   docker compose -f docker/docker-compose.yml run --rm gaussian-lic /usr/local/bin/build_engine.sh
-#   # then run the node:
-#   docker compose -f docker/docker-compose.yml up gaussian-lic
+#   # then bring up an idle container and work inside it:
+#   docker compose -f docker/docker-compose.yml up -d gaussian-lic
+#   docker compose -f docker/docker-compose.yml exec gaussian-lic bash
 #
 # A pre-posed bag must publish these topics (remap with `rosbag play ... a:=b`
 # if yours differ):
@@ -37,12 +42,29 @@ services:
       # without rebuilding the image. build/ and devel/ live one level up at
       # /root/catkin_gaussian/{build,devel}/ so they are unaffected by this mount.
       - ..:/root/catkin_gaussian/src/Gaussian-LIC
-      # read-write so mcap->bag conversion can write the output here too
-      - ${BAGS_DIR:-./bags}:/data/bags
-    # Default for `docker compose up`. Override the launch (and extra roslaunch
-    # args) without editing this file via the LAUNCH env var, e.g.:
-    #   LAUNCH=r3live.launch docker compose ... up gaussian-lic
-    #   LAUNCH="fastlivo2.launch config_path:=config/mine.yaml" docker compose ... up
-    # Or skip this default entirely and run ad-hoc (see README):
-    #   docker compose ... run --rm gaussian-lic roslaunch gaussian_lic r3live.launch
-    command: roslaunch gaussian_lic ${LAUNCH:-fastlivo2.launch}
+      # Host data folder (bags, mcaps, converted output) at /data. Set DATA_DIR
+      # in docker/.env to point at wherever your data lives. Read-write so the
+      # mcap->bag / bag->bag converters can write their output back here.
+      - ${DATA_DIR:-/home/rsl/data}:/data
+      # entrypoint.sh and env.sh are baked into the image via COPY (not covered
+      # by the src mount above, since they land outside src/Gaussian-LIC), so a
+      # fix here would otherwise need a full image rebuild. Bind-mount them
+      # directly over the baked-in copies so edits take effect immediately.
+      - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - ./env.sh:/usr/local/bin/gaussian_lic_env.sh:ro
+      # Named volumes so the catkin build persists across container
+      # recreation (the image itself is never built with a compiled
+      # workspace — see build_ws.sh above). Without these, `up` would
+      # start a container with no devel/setup.bash and roslaunch would
+      # fail to find the gaussian_lic package.
+      - catkin_build:/root/catkin_gaussian/build
+      - catkin_devel:/root/catkin_gaussian/devel
+    # `up` just brings up an idle container — it does NOT auto-launch the node.
+    # You exec in and drive things by hand (convert bags, roslaunch, rosbag
+    # play); see README "Run". Override for a one-off, e.g. run the node directly:
+    #   docker compose ... run --rm gaussian-lic roslaunch gaussian_lic fastlivo2.launch
+    command: sleep infinity
+
+volumes:
+  catkin_build:
+  catkin_devel:
