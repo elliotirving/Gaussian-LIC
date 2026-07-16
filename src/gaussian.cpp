@@ -786,7 +786,7 @@ void decayOptList(int max_iters, const int train_camera_num,
     }
 }
 
-double optimize(const std::shared_ptr<Dataset>& dataset, std::shared_ptr<GaussianModel>& pc)
+double optimize(const std::shared_ptr<Dataset>& dataset, std::shared_ptr<GaussianModel>& pc, int& total_iters)
 {
     pc->t_start_ = std::chrono::steady_clock::now();
     int updated_num = 0;
@@ -871,6 +871,7 @@ double optimize(const std::shared_ptr<Dataset>& dataset, std::shared_ptr<Gaussia
         pc->t_step_ += std::chrono::duration_cast<std::chrono::duration<double>>(pc->t_end_ - pc->t_start_).count();
     }
 
+    total_iters += opt_list.size();
     return updated_num / opt_list.size();
 }
 
@@ -882,7 +883,9 @@ void evaluateVisualQuality(const std::shared_ptr<Dataset>& dataset,
     std::cout << "\n     🎉 Evaluate Visual Quality 🎉\n";
     std::cout << "\n        [Number of Final Gaussians] " << pc->getXYZ().size(0) << std::endl;
 
-    if (fs::exists(result_path)) fs::remove_all(result_path);
+    if (fs::exists(result_path))
+        for (auto& entry : fs::directory_iterator(result_path))
+            fs::remove_all(entry.path());
     fs::create_directories(result_path);
 
     std::string render_dir_path = result_path + "/render";
@@ -1004,4 +1007,66 @@ void evaluateVisualQuality(const std::shared_ptr<Dataset>& dataset,
         std::cout << std::fixed << std::setprecision(3) << "        [In-Sequence Novel View SSIM] " << ssims << std::endl;
         std::cout << std::fixed << std::setprecision(3) << "        [In-Sequence Novel View LPIPS] " << lpipss << std::endl;
     }
+}
+
+void saveFrameSequence(const std::shared_ptr<Dataset>& dataset,
+                       const std::string& result_path)
+{
+    struct CamEntry {
+        std::shared_ptr<Camera> cam;
+        std::string type;
+        int frame_idx;
+    };
+
+    std::vector<CamEntry> all_cams;
+    for (auto& c : dataset->train_cameras_)
+    {
+        int idx = std::stoi(c->image_name_.substr(6, 4));  // "train_XXXX.jpg"
+        all_cams.push_back({c, "train", idx});
+    }
+    for (auto& c : dataset->test_cameras_)
+    {
+        int idx = std::stoi(c->image_name_.substr(5, 4));  // "test_XXXX.jpg"
+        all_cams.push_back({c, "test", idx});
+    }
+
+    std::sort(all_cams.begin(), all_cams.end(),
+              [](const CamEntry& a, const CamEntry& b) {
+                  return a.frame_idx < b.frame_idx;
+              });
+
+    std::string json_path = result_path + "/cameras.json";
+    std::ofstream f(json_path);
+    f << std::fixed << std::setprecision(10);
+    f << "[\n";
+
+    for (size_t i = 0; i < all_cams.size(); ++i)
+    {
+        const auto& entry = all_cams[i];
+        const auto& cam = entry.cam;
+
+        f << "  {\n";
+        f << "    \"frame_idx\": " << entry.frame_idx << ",\n";
+        f << "    \"image_name\": \"" << cam->image_name_ << "\",\n";
+        f << "    \"type\": \"" << entry.type << "\",\n";
+        f << "    \"width\": " << cam->image_width_ << ",\n";
+        f << "    \"height\": " << cam->image_height_ << ",\n";
+        f << "    \"fx\": " << cam->fx_ << ",\n";
+        f << "    \"fy\": " << cam->fy_ << ",\n";
+        f << "    \"cx\": " << cam->cx_ << ",\n";
+        f << "    \"cy\": " << cam->cy_ << ",\n";
+        f << "    \"R_cw\": [[" << cam->R_cw_(0,0) << "," << cam->R_cw_(0,1) << "," << cam->R_cw_(0,2)
+          << "],[" << cam->R_cw_(1,0) << "," << cam->R_cw_(1,1) << "," << cam->R_cw_(1,2)
+          << "],[" << cam->R_cw_(2,0) << "," << cam->R_cw_(2,1) << "," << cam->R_cw_(2,2) << "]],\n";
+        f << "    \"t_cw\": [" << cam->t_cw_(0) << "," << cam->t_cw_(1) << "," << cam->t_cw_(2) << "]\n";
+        f << "  }";
+        if (i + 1 < all_cams.size()) f << ",";
+        f << "\n";
+    }
+
+    f << "]\n";
+    f.close();
+
+    std::cout << "[saveFrameSequence] Saved " << all_cams.size()
+              << " cameras to " << json_path << std::endl;
 }

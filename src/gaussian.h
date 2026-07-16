@@ -199,8 +199,10 @@ public:
 };
 
 void extend(const std::shared_ptr<Dataset>& dataset, std::shared_ptr<GaussianModel>& pc);
-double optimize(const std::shared_ptr<Dataset>& dataset, std::shared_ptr<GaussianModel>& pc);
-void evaluateVisualQuality(const std::shared_ptr<Dataset>& dataset, 
+double optimize(const std::shared_ptr<Dataset>& dataset, std::shared_ptr<GaussianModel>& pc, int& total_iters);
+void evaluateVisualQuality(const std::shared_ptr<Dataset>& dataset,
                            std::shared_ptr<GaussianModel>& pc,
                            const std::string& result_path,
                            const std::string& lpips_path);
+void saveFrameSequence(const std::shared_ptr<Dataset>& dataset,
+                       const std::string& result_path);

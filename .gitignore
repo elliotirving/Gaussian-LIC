@@ -24,3 +24,5 @@ third_party/
 
 __pycache__/
 *.py[cod]
+
+gaussianlic_results_OLD/

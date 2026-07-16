@@ -162,6 +162,7 @@ void mapping(const YAML::Node& node, const std::string& result_path, const std::
     double total_mapping_time = 0;
     double total_adding_time = 0;
     double total_extending_time = 0;
+    int total_iters = 0;
 
     Frame cur_frame;
     while (!exit_flag)
@@ -204,7 +205,7 @@ void mapping(const YAML::Node& node, const std::string& result_path, const std::
 
         /// [5] optimize map
         t_start = std::chrono::steady_clock::now();
-        double updated_num = optimize(dataset, gaussians);
+        double updated_num = optimize(dataset, gaussians, total_iters);
         torch::cuda::synchronize();
         t_end = std::chrono::steady_clock::now();
         total_mapping_time += std::chrono::duration_cast<std::chrono::duration<double>>(t_end - t_start).count();
@@ -222,9 +223,11 @@ void mapping(const YAML::Node& node, const std::string& result_path, const std::
     std::cout << std::fixed << std::setprecision(2) << "         4) CPU2GPU " << gaussians->t_tocuda_ << "s" << std::endl;
     std::cout << std::fixed << std::setprecision(2) << "        [Total Adding Time] " << total_adding_time << "s" << std::endl;
     std::cout << std::fixed << std::setprecision(2) << "        [Total Extending Time] " << total_extending_time << "s" << std::endl;
+    std::cout << "        [Total Optimize Iterations] " << total_iters << std::endl;
     torch::NoGradGuard no_grad;
     evaluateVisualQuality(dataset, gaussians, result_path, lpips_path);
     gaussians->saveMap(result_path);
+    saveFrameSequence(dataset, result_path);
 
     std::cout << "\n\n😋 Gaussian-LIC Done!\n\n\n";
 }

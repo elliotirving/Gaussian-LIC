@@ -1,0 +1,41 @@
+version: '3.9'
+
+services:
+  gaussian-lic:
+    image: gaussian-lic:noetic-cu117
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gaussian-lic
+    network_mode: host
+    ipc: host
+    shm_size: "20g"
+    stdin_open: true
+    tty: true
+
+    environment:
+      DISPLAY: ${DISPLAY:-}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-all}
+
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # Host Gaussian-LIC source → catkin workspace (no clone needed)
+      - .:/root/catkin_gaussian/src/Gaussian-LIC
+      # Persist build/devel across container restarts
+      - catkin_gaussian_ws:/root/catkin_gaussian
+      # Datasets land where the code expects them
+      - /scratch/eirving:/data/datasets
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    command: ["bash"]
+
+volumes:
+  catkin_gaussian_ws:

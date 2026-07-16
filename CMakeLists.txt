@@ -24,12 +24,12 @@ find_package(catkin REQUIRED COMPONENTS
   eigen_conversions
 )
 
-set(OpenCV_DIR ~/Software/opencv/opencv-4.7.0/build)
+set(OpenCV_DIR /opt/opencv-4.7.0/lib/cmake/opencv4)
 find_package(OpenCV 4 REQUIRED)
-set(Torch_DIR ~/Software/libtorch/share/cmake/Torch)
+set(Torch_DIR /opt/libtorch/share/cmake/Torch)
 find_package(Torch REQUIRED)
 
-set(TENSORRT_ROOT "~/Software/TensorRT-8.6.1.6")
+set(TENSORRT_ROOT "/opt/TensorRT-8.6.1.6")
 set(TENSORRT_INCLUDE_DIR "${TENSORRT_ROOT}/include")
 set(TENSORRT_LIB_DIR "${TENSORRT_ROOT}/lib")
 
