@@ -64,12 +64,15 @@ public:
         cy = node["cy"].as<double>();
 
         select_every_k_frame = node["select_every_k_frame"].as<int>();
+        point_stride = node["point_stride"] ? node["point_stride"].as<int>() : 1;
         depth_completion = node["depth_completion"].as<bool>();
         patch_size = node["patch_size"].as<int>();
         max_depth = node["max_depth"].as<double>();
+        crop_y = node["crop_y"] ? node["crop_y"].as<int>() : 0;
         std::string pkg_path = ros::package::getPath("gaussian_lic");
         if (height == 512 && width == 640) engine_path = pkg_path + "/ckpt/spnet_512_640.engine";
         if (height == 480 && width == 640) engine_path = pkg_path + "/ckpt/spnet_480_640.engine";
+        if (height == 640 && width == 800) engine_path = pkg_path + "/ckpt/spnet_640_800.engine";  // odin1 half-res
 
         sh_degree = node["sh_degree"].as<int>();
         white_background = node["white_background"].as<bool>();
@@ -104,9 +107,11 @@ public:
     double cy;
 
     int select_every_k_frame;
+    int point_stride;
     bool depth_completion;
     int patch_size;
     double max_depth;
+    int crop_y;         // pixels to remove from each of top AND bottom before resize (0 = no crop)
     std::string engine_path;
 
     /// gaussian

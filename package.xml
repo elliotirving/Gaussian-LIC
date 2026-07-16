@@ -49,6 +49,22 @@
   <!-- Use doc_depend for packages you need only for building documentation: -->
   <!--   <doc_depend>doxygen</doc_depend> -->
   <buildtool_depend>catkin</buildtool_depend>
+
+  <!-- Components required by CMakeLists.txt find_package(catkin COMPONENTS ...)
+       but originally missing here. Declared so catkin's topological order
+       builds them (notably the in-workspace cv_bridge built from source against
+       the CUDA OpenCV) BEFORE gaussian_lic. <depend> = build + export + exec. -->
+  <depend>roslib</depend>
+  <depend>cv_bridge</depend>
+  <depend>image_transport</depend>
+  <depend>pcl_conversions</depend>
+  <depend>pcl_ros</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf</depend>
+  <depend>eigen_conversions</depend>
+
   <build_depend>roscpp</build_depend>
   <build_depend>rospy</build_depend>
   <build_depend>std_msgs</build_depend>

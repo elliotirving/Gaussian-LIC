@@ -25,6 +25,7 @@
 #include <tf_conversions/tf_eigen.h>
 
 #include <sstream>
+#include <fstream>
 #include <iomanip>
 #include <random>
 #include <algorithm>
@@ -118,6 +119,27 @@ void Dataset::addFrame(Frame& cur_frame)
     dp_ptr = cv_bridge::toCvCopy(cur_frame.depth_msg, sensor_msgs::image_encodings::TYPE_32FC1);
     cv::Mat depth_map = dp_ptr->image;  // metric float32
 
+    /// Crop then resize to the target training resolution defined in the config.
+    /// crop_y_ (pixels off each of top AND bottom) must be applied BEFORE the
+    /// 0.5x resize so that the y scale factor stays identical to the x scale
+    /// factor, keeping fy exact. Without the crop, a non-integer scale (e.g.
+    /// 640/1296 = 0.4938) introduces ~1.25% error in fy which misplaces 3D
+    /// points throughout the scene. With the crop (1296-16 = 1280 → 640 = 0.5x)
+    /// both axes scale by exactly the same factor and all intrinsics halve cleanly.
+    /// INTER_NEAREST for sparse depth avoids blending metric values with zero holes.
+    if (image_rgb.cols != target_width_ || image_rgb.rows != target_height_)
+    {
+        if (crop_y_ > 0)
+        {
+            int src_h = image_rgb.rows;
+            cv::Rect roi(0, crop_y_, image_rgb.cols, src_h - 2 * crop_y_);
+            image_rgb = image_rgb(roi).clone();
+            depth_map = depth_map(roi).clone();
+        }
+        cv::resize(image_rgb, image_rgb, cv::Size(target_width_, target_height_), 0, 0, cv::INTER_AREA);
+        cv::resize(depth_map, depth_map, cv::Size(target_width_, target_height_), 0, 0, cv::INTER_NEAREST);
+    }
+
     /// pose
     Eigen::Quaterniond q_wc;
     Eigen::Vector3d t_wc;
@@ -129,12 +151,13 @@ void Dataset::addFrame(Frame& cur_frame)
     /// point
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
     pcl::fromROSMsg(*cur_frame.point_msg, *cloud);
-    for (const auto& pt : cloud->points)
+    Eigen::Matrix3d R_cw = q_wc.toRotationMatrix().transpose();
+    Eigen::Vector3d t_cw = - R_cw * t_wc;
+    for (size_t i = 0; i < cloud->points.size(); i += point_stride_)
     {
+        const auto& pt = cloud->points[i];
         pointcloud_.emplace_back(Eigen::Vector3d(pt.x, pt.y, pt.z));
         pointcolor_.emplace_back(Eigen::Vector3d(pt.r, pt.g, pt.b) / 255.0);
-        Eigen::Matrix3d R_cw = q_wc.toRotationMatrix().transpose();
-        Eigen::Vector3d t_cw = - R_cw * t_wc;
         Eigen::Vector3d pt_c = R_cw * pointcloud_.back() + t_cw;
         assert(pt_c(2) > 0);
         pointdepth_.push_back(static_cast<float>(pt_c(2)));
@@ -786,7 +809,7 @@ void decayOptList(int max_iters, const int train_camera_num,
     }
 }
 
-double optimize(const std::shared_ptr<Dataset>& dataset, std::shared_ptr<GaussianModel>& pc)
+double optimize(const std::shared_ptr<Dataset>& dataset, std::shared_ptr<GaussianModel>& pc, int& total_iters)
 {
     pc->t_start_ = std::chrono::steady_clock::now();
     int updated_num = 0;
@@ -871,18 +894,22 @@ double optimize(const std::shared_ptr<Dataset>& dataset, std::shared_ptr<Gaussia
         pc->t_step_ += std::chrono::duration_cast<std::chrono::duration<double>>(pc->t_end_ - pc->t_start_).count();
     }
 
+    total_iters += opt_list.size();
     return updated_num / opt_list.size();
 }
 
-void evaluateVisualQuality(const std::shared_ptr<Dataset>& dataset, 
+VisualQualityMetrics evaluateVisualQuality(const std::shared_ptr<Dataset>& dataset,
                            std::shared_ptr<GaussianModel>& pc,
                            const std::string& result_path,
                            const std::string& lpips_path)
 {
+    VisualQualityMetrics metrics;
     std::cout << "\n     🎉 Evaluate Visual Quality 🎉\n";
     std::cout << "\n        [Number of Final Gaussians] " << pc->getXYZ().size(0) << std::endl;
 
-    if (fs::exists(result_path)) fs::remove_all(result_path);
+    if (fs::exists(result_path))
+        for (auto& entry : fs::directory_iterator(result_path))
+            fs::remove_all(entry.path());
     fs::create_directories(result_path);
 
     std::string render_dir_path = result_path + "/render";
@@ -954,6 +981,7 @@ void evaluateVisualQuality(const std::shared_ptr<Dataset>& dataset,
         std::cout << std::fixed << std::setprecision(2) << "        [Training View PSNR] " << psnrs << std::endl;
         std::cout << std::fixed << std::setprecision(3) << "        [Training View SSIM] " << ssims << std::endl;
         std::cout << std::fixed << std::setprecision(3) << "        [Training View LPIPS] " << lpipss << std::endl;
+        metrics.train_psnr = psnrs; metrics.train_ssim = ssims; metrics.train_lpips = lpipss;
     }
     {
         double psnrs = 0;
@@ -1003,5 +1031,69 @@ void evaluateVisualQuality(const std::shared_ptr<Dataset>& dataset,
         std::cout << std::fixed << std::setprecision(2) << "        [In-Sequence Novel View PSNR] " << psnrs << std::endl;
         std::cout << std::fixed << std::setprecision(3) << "        [In-Sequence Novel View SSIM] " << ssims << std::endl;
         std::cout << std::fixed << std::setprecision(3) << "        [In-Sequence Novel View LPIPS] " << lpipss << std::endl;
+        metrics.test_psnr = psnrs; metrics.test_ssim = ssims; metrics.test_lpips = lpipss;
     }
+    return metrics;
+}
+
+void saveFrameSequence(const std::shared_ptr<Dataset>& dataset,
+                       const std::string& result_path)
+{
+    struct CamEntry {
+        std::shared_ptr<Camera> cam;
+        std::string type;
+        int frame_idx;
+    };
+
+    std::vector<CamEntry> all_cams;
+    for (auto& c : dataset->train_cameras_)
+    {
+        int idx = std::stoi(c->image_name_.substr(6, 4));  // "train_XXXX.jpg"
+        all_cams.push_back({c, "train", idx});
+    }
+    for (auto& c : dataset->test_cameras_)
+    {
+        int idx = std::stoi(c->image_name_.substr(5, 4));  // "test_XXXX.jpg"
+        all_cams.push_back({c, "test", idx});
+    }
+
+    std::sort(all_cams.begin(), all_cams.end(),
+              [](const CamEntry& a, const CamEntry& b) {
+                  return a.frame_idx < b.frame_idx;
+              });
+
+    std::string json_path = result_path + "/cameras.json";
+    std::ofstream f(json_path);
+    f << std::fixed << std::setprecision(10);
+    f << "[\n";
+
+    for (size_t i = 0; i < all_cams.size(); ++i)
+    {
+        const auto& entry = all_cams[i];
+        const auto& cam = entry.cam;
+
+        f << "  {\n";
+        f << "    \"frame_idx\": " << entry.frame_idx << ",\n";
+        f << "    \"image_name\": \"" << cam->image_name_ << "\",\n";
+        f << "    \"type\": \"" << entry.type << "\",\n";
+        f << "    \"width\": " << cam->image_width_ << ",\n";
+        f << "    \"height\": " << cam->image_height_ << ",\n";
+        f << "    \"fx\": " << cam->fx_ << ",\n";
+        f << "    \"fy\": " << cam->fy_ << ",\n";
+        f << "    \"cx\": " << cam->cx_ << ",\n";
+        f << "    \"cy\": " << cam->cy_ << ",\n";
+        f << "    \"R_cw\": [[" << cam->R_cw_(0,0) << "," << cam->R_cw_(0,1) << "," << cam->R_cw_(0,2)
+          << "],[" << cam->R_cw_(1,0) << "," << cam->R_cw_(1,1) << "," << cam->R_cw_(1,2)
+          << "],[" << cam->R_cw_(2,0) << "," << cam->R_cw_(2,1) << "," << cam->R_cw_(2,2) << "]],\n";
+        f << "    \"t_cw\": [" << cam->t_cw_(0) << "," << cam->t_cw_(1) << "," << cam->t_cw_(2) << "]\n";
+        f << "  }";
+        if (i + 1 < all_cams.size()) f << ",";
+        f << "\n";
+    }
+
+    f << "]\n";
+    f.close();
+
+    std::cout << "[saveFrameSequence] Saved " << all_cams.size()
+              << " cameras to " << json_path << std::endl;
 }

@@ -58,7 +58,13 @@ public:
         setWorldViewTransform();
         setProjectionMatrix();
         full_proj_transform_ = (world_view_transform_.unsqueeze(0).bmm(projection_matrix_.unsqueeze(0))).squeeze(0);
-        camera_center_ = world_view_transform_.inverse().index({3, torch::indexing::Slice(0, 3)});
+        // Camera center = C2W translation column, with trans_/scale_ applied.
+        // Computed from Eigen to avoid torch CUDA linalg (JetPack cuSOLVER is
+        // inference-only and omits cusolverDnXsyevBatched_bufferSize, which
+        // libtorch_cuda_linalg.so requires on dlopen even for linalg.inv).
+        Eigen::Vector3f cam_center_e =
+            (-R_cw_.cast<float>().transpose() * t_cw_.cast<float>() + trans_) * scale_;
+        camera_center_ = torch::from_blob(cam_center_e.data(), {3}, torch::kFloat32).clone().cuda();
 
         limx_neg_ = - 0.15 * image_width_ / fx_ - cx_ / fx_;
         limx_pos_ = 1.15 * image_width_ / fx_ - cx_ / fx_;
