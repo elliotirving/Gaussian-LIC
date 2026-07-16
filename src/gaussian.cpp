@@ -278,6 +278,7 @@ GaussianModel::GaussianModel(const Params& prm)
     optimize_depth_ = prm.optimize_depth;
     lambda_depth_ = prm.lambda_depth;
     iteration_decay_ = prm.iteration_decay;
+    max_iters_ = prm.max_iters;
 
     apply_exposure_ = prm.apply_exposure;
     exposure_lr_ = prm.exposure_lr;
@@ -814,7 +815,7 @@ double optimize(const std::shared_ptr<Dataset>& dataset, std::shared_ptr<Gaussia
     pc->t_start_ = std::chrono::steady_clock::now();
     int updated_num = 0;
     std::vector<int> opt_list;
-    int max_iters = 100;
+    int max_iters = pc->max_iters_;
 
     int train_camera_num = dataset->train_cameras_.size();
     std::vector<int> all_list(train_camera_num);

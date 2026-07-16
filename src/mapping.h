@@ -91,6 +91,7 @@ public:
         optimize_depth = node["optimize_depth"].as<bool>();
         lambda_depth = node["lambda_depth"].as<double>();
         iteration_decay = node["iteration_decay"].as<bool>();
+        max_iters = node["max_iters"] ? node["max_iters"].as<int>() : 100;
 
         apply_exposure = node["apply_exposure"].as<bool>();
         exposure_lr = node["exposure_lr"].as<double>();
@@ -132,6 +133,7 @@ public:
     bool optimize_depth;
     double lambda_depth;
     bool iteration_decay;
+    int max_iters;     // cameras optimized per keyframe in optimize() (default 100)
 
     bool apply_exposure;
     double exposure_lr;

@@ -162,6 +162,7 @@ public:
     bool optimize_depth_;
     double lambda_depth_;
     bool iteration_decay_;
+    int max_iters_;
 
     bool apply_exposure_;
     double exposure_lr_;
