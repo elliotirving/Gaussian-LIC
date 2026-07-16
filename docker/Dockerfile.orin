@@ -1,0 +1,181 @@
+# =============================================================================
+# Gaussian-LIC on Jetson AGX Orin (JetPack 6.2 / L4T r36.4 / CUDA 12.6 / TRT 10)
+# -----------------------------------------------------------------------------
+# A PORT of the x86 desktop stack, rebuilt for aarch64 / sm_87 against JetPack's
+# CUDA 12.6 + TensorRT 10 (every "no compilation required" download in the README
+# is x86_64 / CUDA 11.7 / TRT 8.6 and does not run on the Orin). Bag-driven only;
+# no COCOLIC. The source changes this needs are compile-guarded (see CMakeLists
+# and src/depth_completer.*) so the SAME tree still builds on x86 / TRT 8.6.
+#
+# Build (ON the Orin, nvidia container runtime as default):
+#   docker compose -f docker/docker-compose.yml build glic-orin
+# The OpenCV-with-CUDA stage is long (tens of minutes); it is a cached stage.
+# =============================================================================
+
+# JetPack 6.2 == L4T r36.4.x. NVIDIA never published r36.4.3 l4t-jetpack; r36.4.0
+# (JP6.1, also CUDA 12.6) runs fine on a JP6.2 host via the mounted host driver.
+ARG L4T_BASE=nvcr.io/nvidia/l4t-jetpack:r36.4.0
+
+# -----------------------------------------------------------------------------
+# Stage 1: OpenCV 4.10.0 + contrib, WITH CUDA for sm_87 (src/tensor_utils.h uses
+# cv::cuda::GpuMat / cudaimgproc).
+# -----------------------------------------------------------------------------
+FROM ${L4T_BASE} AS opencv-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git wget unzip pkg-config \
+        libgtk-3-dev libavcodec-dev libavformat-dev libswscale-dev \
+        libtbb-dev libjpeg-dev libpng-dev libtiff-dev libeigen3-dev \
+        python3-dev python3-numpy \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG OPENCV_VERSION=4.10.0
+WORKDIR /opt/opencv_src
+RUN wget -q https://github.com/opencv/opencv/archive/refs/tags/${OPENCV_VERSION}.tar.gz -O opencv.tar.gz \
+    && wget -q https://github.com/opencv/opencv_contrib/archive/refs/tags/${OPENCV_VERSION}.tar.gz -O contrib.tar.gz \
+    && tar xf opencv.tar.gz && tar xf contrib.tar.gz && rm -f *.tar.gz
+
+# CUDA_ARCH_BIN=8.7 is the Orin (Ampere) compute capability; building only that
+# arch keeps the build short.
+RUN mkdir -p /opt/opencv_src/opencv-${OPENCV_VERSION}/build \
+    && cd /opt/opencv_src/opencv-${OPENCV_VERSION}/build \
+    && cmake -DCMAKE_BUILD_TYPE=RELEASE \
+        -DCMAKE_INSTALL_PREFIX=/opt/opencv \
+        -DWITH_CUDA=ON -DWITH_CUDNN=ON -DOPENCV_DNN_CUDA=ON \
+        -DCUDA_ARCH_BIN=8.7 -DCUDA_ARCH_PTX=8.7 \
+        -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda \
+        -DENABLE_FAST_MATH=ON -DCUDA_FAST_MATH=ON \
+        -DOPENCV_EXTRA_MODULES_PATH="/opt/opencv_src/opencv_contrib-${OPENCV_VERSION}/modules" \
+        -DBUILD_TIFF=ON -DBUILD_ZLIB=ON -DBUILD_JASPER=ON -DBUILD_CCALIB=ON \
+        -DBUILD_JPEG=ON -DWITH_FFMPEG=ON \
+        -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF -DBUILD_EXAMPLES=OFF \
+        .. \
+    && make -j"$(nproc)" \
+    && make install \
+    && rm -rf /opt/opencv_src
+
+# -----------------------------------------------------------------------------
+# Stage 2: runtime — ROS Noetic (RoboStack/conda) + LibTorch-for-Jetson + the
+# catkin workspace.
+# -----------------------------------------------------------------------------
+FROM ${L4T_BASE} AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+SHELL ["/bin/bash", "-lc"]
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git wget curl ca-certificates bzip2 unzip \
+        pkg-config libffi-dev libyaml-cpp-dev libeigen3-dev \
+        python3-dev python3-numpy python3-pip \
+        libgl1 libglib2.0-0 libgtk-3-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# CUDA-enabled OpenCV 4.10 from stage 1.
+COPY --from=opencv-builder /opt/opencv /opt/opencv
+
+# --- ROS Noetic via RoboStack (conda-forge) ----------------------------------
+# RoboStack ships a Noetic that runs on Ubuntu 22.04 / aarch64 (official Noetic
+# is 20.04-only). Installed via micromamba.
+ENV MAMBA_ROOT_PREFIX=/opt/conda
+ENV ROS_ENV=/opt/conda/envs/ros
+RUN curl -Ls https://micro.mamba.pm/api/micromamba/linux-aarch64/latest \
+        | tar -xvj -C /usr/local bin/micromamba
+
+# Two solves (base, then messages/utilities) rather than one giant create:
+# aarch64 conda-forge repodata is thin, so a single RUN re-solves everything on
+# any transient failure. Python pinned to 3.11 (robostack-staging/aarch64 builds
+# ros-noetic-* for 3.9/3.11/3.12, NOT 3.10); LibTorch is decoupled (system py).
+RUN micromamba create -y -n ros -c robostack-staging -c conda-forge \
+        python=3.11 ros-noetic-ros-base ros-noetic-catkin catkin_tools \
+    && micromamba clean -ya
+RUN micromamba install -y -n ros -c robostack-staging -c conda-forge \
+        ros-noetic-roscpp ros-noetic-roslib ros-noetic-rospy \
+        ros-noetic-std-msgs ros-noetic-sensor-msgs ros-noetic-nav-msgs \
+        ros-noetic-geometry-msgs ros-noetic-tf ros-noetic-eigen-conversions \
+        ros-noetic-image-transport ros-noetic-pcl-conversions ros-noetic-pcl-ros \
+        ros-noetic-rosbag ros-noetic-roslaunch \
+    && micromamba clean -ya
+# cv_bridge is intentionally NOT from conda (its build pulls a second, CUDA-less
+# OpenCV that clashes with /opt/opencv). It is built from source below.
+
+# --- LibTorch + torch for Jetson (CUDA 12.6 aarch64) -------------------------
+# Into SYSTEM Python 3.10 (the only Jetson torch wheels are cp310; the ROS env is
+# 3.11). Serves both the C++ build (share/cmake/Torch) and the SPNet ONNX export.
+# The code targets libtorch 2.0.1; 2.8+ is the Jetson floor, so a few ATen call
+# sites may need adjustment. Override TORCH_WHL/TORCHVISION_WHL to pin a pair.
+ARG TORCH_WHL=https://pypi.jetson-ai-lab.io/jp6/cu126/+f/46b/b8b13f844b211/torch-2.11.0-cp310-cp310-linux_aarch64.whl
+ARG TORCHVISION_WHL=https://pypi.jetson-ai-lab.io/jp6/cu126/+f/d11/6f08d3d62417d/torchvision-0.26.0-cp310-cp310-linux_aarch64.whl
+RUN python3 -m pip install --no-cache-dir "${TORCH_WHL}" "${TORCHVISION_WHL}" \
+    && test -f /usr/local/lib/python3.10/dist-packages/torch/share/cmake/Torch/TorchConfig.cmake
+
+# ROS2 .mcap -> ROS1 .bag conversion (pure Python; no ROS2 runtime needed).
+RUN micromamba run -n ros pip install --no-cache-dir rosbags
+
+# cv_bridge (source build) links Boost.Python; ros-base pulls only core Boost.
+RUN micromamba install -y -n ros -c conda-forge libboost-python-devel \
+    && micromamba clean -ya
+
+# Late-added deps (kept here so the expensive layers above stay cached):
+#   libglm-dev  — the CUDA rasterizer includes <glm/glm.hpp> as a system header.
+#   ros-noetic-tf-conversions — mapping.h/gaussian.cpp #include tf_conversions.
+#   libopenblas0 — the Jetson torch wheel links libopenblas.so.0 (needed by
+#                  `import torch` in the SPNet export via system Python 3.10).
+RUN apt-get update && apt-get install -y --no-install-recommends libglm-dev libopenblas0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && micromamba install -y -n ros -c robostack-staging -c conda-forge \
+        ros-noetic-tf-conversions \
+    && micromamba clean -ya
+
+# --- cuDSS (torch 2.11 hard dependency) --------------------------------------
+# libtorch_cuda.so has a DT_NEEDED on libcudss.so.0. Install into the same system
+# Python as torch, then symlink next to libtorch so torch's $ORIGIN rpath finds
+# it at runtime and build_ws.sh's -rpath-link resolves it at link time.
+ARG CUDSS_VERSION=0.7.1.6
+RUN python3 -m pip install --no-cache-dir "nvidia-cudss-cu12==${CUDSS_VERSION}" \
+    && CUDSS_LIB_DIR="$(dirname "$(find /usr/local/lib/python3.10/dist-packages/nvidia -name 'libcudss.so.0' | head -n1)")" \
+    && test -n "${CUDSS_LIB_DIR}" \
+    && ln -sf "${CUDSS_LIB_DIR}"/libcudss*.so* /usr/local/lib/python3.10/dist-packages/torch/lib/ \
+    && test -e /usr/local/lib/python3.10/dist-packages/torch/lib/libcudss.so.0
+
+# --- Build/runtime environment -----------------------------------------------
+# TensorRT 10 + CUDA come from the l4t-jetpack base (system multiarch).
+ENV TORCH_CUDA_ARCH_LIST="8.7"
+
+# Dep locations for CMakeLists (already-overridable) — these feed build_ws.sh.
+ENV OpenCV_DIR=/opt/opencv/lib/cmake/opencv4 \
+    Torch_DIR=/usr/local/lib/python3.10/dist-packages/torch/share/cmake/Torch \
+    TENSORRT_INCLUDE_DIR=/usr/include/aarch64-linux-gnu \
+    TENSORRT_LIB_DIR=/usr/lib/aarch64-linux-gnu \
+    CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda
+
+# Shared-script ENV contract (consumed by env.sh / build_ws.sh / build_engine.sh).
+ENV GLIC_CONDA_ENV=ros \
+    GLIC_ROS_SETUP=/opt/conda/envs/ros/setup.bash \
+    GLIC_GAUSSIAN_WS=/root/catkin_gaussian/devel/setup.bash \
+    GLIC_SRC_DIR=/root/catkin_gaussian/src/Gaussian-LIC \
+    GLIC_LD_PREFIX=/usr/local/lib/python3.10/dist-packages/torch/lib:/opt/opencv/lib:/opt/conda/envs/ros/lib:/usr/lib/aarch64-linux-gnu:/usr/local/cuda/lib64 \
+    GAUSSIAN_LIC_CUDA_ARCH=87 \
+    GLIC_CMAKE_LEGACY_POLICIES=1 \
+    GLIC_LINKER_FLAGS="-L/opt/conda/envs/ros/lib -Wl,-rpath-link,/opt/conda/envs/ros/lib -Wl,-rpath-link,/usr/local/lib/python3.10/dist-packages/torch/lib -Wl,-rpath,/opt/conda/envs/ros/lib" \
+    GLIC_CXX_STDLIB="-l:libstdc++.so.6" \
+    SPNET_PYTHON=/usr/bin/python3 \
+    TRTEXEC=/usr/src/tensorrt/bin/trtexec \
+    SPNET_RESOLUTIONS="512_640 480_640 640_800"
+
+# --- Workspace ---------------------------------------------------------------
+# Source is bind-mounted at runtime (compose); COPY it so the image builds
+# standalone. cv_bridge is built from source against the CUDA OpenCV so there is
+# exactly one OpenCV in the process. Workspace is compiled at runtime (build_ws.sh).
+WORKDIR /root/catkin_gaussian
+COPY . /root/catkin_gaussian/src/Gaussian-LIC
+RUN git clone --branch noetic https://github.com/ros-perception/vision_opencv.git \
+        /root/catkin_gaussian/src/vision_opencv
+
+COPY docker/entrypoint.sh   /usr/local/bin/entrypoint.sh
+COPY docker/env.sh          /usr/local/bin/gaussian_lic_env.sh
+COPY docker/build_ws.sh     /usr/local/bin/build_ws.sh
+COPY docker/build_engine.sh /usr/local/bin/build_engine.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/build_ws.sh /usr/local/bin/build_engine.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["bash"]

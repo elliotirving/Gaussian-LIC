@@ -1,3 +1,4 @@
+import inspect
 import torch
 from SPNet.src.networks import V2Net
 
@@ -15,6 +16,14 @@ depth = torch.randn(1, 1, 512, 640).cuda()
 mask = torch.ones_like(depth).cuda()
 mask[depth == 0] = 0
 
+# torch >= 2.5 defaults to the dynamo exporter (needs onnxscript, different
+# dynamic-shape semantics); force the legacy TorchScript exporter these scripts
+# target. The `dynamo` kwarg does not exist on torch < 2.5 (e.g. x86's 2.0.1),
+# so only pass it where supported — keeps one script working on both stacks.
+export_kwargs = dict(opset_version=17)
+if "dynamo" in inspect.signature(torch.onnx.export).parameters:
+    export_kwargs["dynamo"] = False
+
 torch.onnx.export(
     net,
     (rgb, depth, mask),
@@ -27,7 +36,7 @@ torch.onnx.export(
         "mask": {0: "batch", 2: "height", 3: "width"},
         "pred": {0: "batch", 2: "height", 3: "width"},
     },
-    opset_version=17
+    **export_kwargs,
 )
 
 print("ONNX Export ok.")

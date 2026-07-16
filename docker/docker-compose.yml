@@ -1,0 +1,71 @@
+# Unified Gaussian-LIC compose. Two services — pick the one for your hardware:
+#
+#   x86 / 3090:  docker compose -f docker/docker-compose.yml build glic-x86
+#   Jetson Orin: docker compose -f docker/docker-compose.yml build glic-orin
+#
+# Workflow (see the "Docker" section of the root README):
+#   # one-time on the device, build the workspace (persists in named volumes):
+#   docker compose -f docker/docker-compose.yml run --rm --name glic <svc> /usr/local/bin/build_ws.sh
+#   # one-time, after placing Large_300.pth (+ SPNet) in ckpt/:
+#   docker compose -f docker/docker-compose.yml run --rm --name glic <svc> /usr/local/bin/build_engine.sh
+#   # terminal 1 (owns the container):
+#   docker compose -f docker/docker-compose.yml run --rm --name glic <svc> bash
+#   # terminal 2+ (attach):  docker exec -it glic bash
+#
+# Set DATA_DIR in docker/.env to your host data folder (mounted read-write at /data).
+
+x-glic-common: &glic-common
+  network_mode: host          # share one ROS master across all shells + rosbag play
+  ipc: host
+  environment:
+    - NVIDIA_VISIBLE_DEVICES=all
+    - NVIDIA_DRIVER_CAPABILITIES=all
+    - DISPLAY=${DISPLAY:-:0}
+    - ROS_MASTER_URI=http://localhost:11311
+  volumes:
+    - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    # Whole project mounted so host edits (src/, config/, launch/, ckpt/, ...)
+    # are live inside the container. build/ and devel/ live one level up.
+    - ..:/root/catkin_gaussian/src/Gaussian-LIC
+    # Host data (bags, mcaps, converted output). Read-write for the converters.
+    - ${DATA_DIR:-/home/rsl/data}:/data
+    # Bind the shared helper scripts over the baked-in copies so host edits take
+    # effect without an image rebuild.
+    - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+    - ./env.sh:/usr/local/bin/gaussian_lic_env.sh:ro
+    - ./build_ws.sh:/usr/local/bin/build_ws.sh:ro
+    - ./build_engine.sh:/usr/local/bin/build_engine.sh:ro
+    # Named volumes so the catkin build persists across container recreation.
+    - catkin_build:/root/catkin_gaussian/build
+    - catkin_devel:/root/catkin_gaussian/devel
+  command: bash
+
+services:
+  # x86 desktop (3060/3090): CUDA 11.7 / TensorRT 8.6 / apt ROS Noetic + COCOLIC.
+  glic-x86:
+    <<: *glic-common
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.x86
+    image: gaussian-lic:x86
+    shm_size: "20g"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Jetson AGX Orin (JetPack 6.2): CUDA 12.6 / TensorRT 10 / RoboStack ROS. No COCOLIC.
+  glic-orin:
+    <<: *glic-common
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.orin
+    image: gaussian-lic:orin
+    runtime: nvidia          # default on JetPack; makes GPU access explicit
+
+volumes:
+  catkin_build:
+  catkin_devel:

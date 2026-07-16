@@ -34,6 +34,67 @@ Gaussian-LIC is a photo-realistic LiDAR-Inertial-Camera Gaussian Splatting SLAM 
 
 Questions? Please don't hesitate to reach out to Xiaolei Lang (Jerry) at jerry_locker@zju.edu.cn.
 
+## Docker
+
+Two images share one source tree; pick the service for your hardware:
+
+| Service | Hardware | Stack | COCOLIC |
+|---|---|---|---|
+| `glic-x86` | x86 desktop (3060/3090) | CUDA 11.7 · TRT 8.6 · apt ROS Noetic | yes |
+| `glic-orin` | Jetson AGX Orin (JetPack 6.2) | CUDA 12.6 · TRT 10 · RoboStack ROS | no (pre-posed bags) |
+
+Below, `<svc>` is `glic-x86` or `glic-orin`. Set `DATA_DIR` in [`docker/.env`](docker/.env) to your host data folder (mounted read-write at `/data`).
+
+```bash
+# 1. Build the image
+docker compose -f docker/docker-compose.yml build <svc>
+
+# 2. One-time on the device: build the catkin workspace (persists in a volume)
+docker compose -f docker/docker-compose.yml run --rm --name glic <svc> /usr/local/bin/build_ws.sh
+
+# 3. One-time: build the SPNet TensorRT engine(s). First place the SPNet repo and
+#    Large_300.pth in ckpt/ (see "Install" below). Engines are arch+TRT-specific,
+#    so they must be built on the target machine.
+docker compose -f docker/docker-compose.yml run --rm --name glic <svc> /usr/local/bin/build_engine.sh
+```
+
+**Run** — one terminal owns the container, others attach (they share one ROS master via `network_mode: host`):
+
+```bash
+xhost +local:root                                                        # once, for GUI windows
+
+# Terminal 1 — owns the container; launch the mapping node (waits for "😋 Ready!")
+docker compose -f docker/docker-compose.yml run --rm --name glic <svc> bash
+roslaunch gaussian_lic r3live.launch          # config_path defaults to config/r3live.yaml
+
+# Terminal 2 — attach and feed poses (see below)
+docker exec -it glic bash
+```
+
+**Feeding poses** (the node subscribes to exactly these topics):
+
+| Topic | Type |
+|---|---|
+| `/pose_for_gs` | `geometry_msgs/PoseStamped` |
+| `/points_for_gs` | `sensor_msgs/PointCloud2` |
+| `/image_for_gs` | `sensor_msgs/Image` |
+| `/depth_for_gs` | `sensor_msgs/Image` (sparse; SPNet densifies it) |
+
+- **Pre-posed bag (both images).** Convert a ROS2 mcap once, then play it:
+  ```bash
+  python3 scripts/mcap_to_glic2_bag.py /data/in.mcap /data/out_glic.bag \
+      --pose-topic /odin1/odometry_camera --pcd-topic /odin1/cloud_slam \
+      --image-topic /odin1/image/undistorted --depth-topic /odin1/depth_img_competetion
+  rosbag play /data/out_glic.bag            # in terminal 2
+  ```
+- **Live COCOLIC (`glic-x86` only).** In terminal 2, run Coco-LIC to publish the topics live:
+  ```bash
+  source ~/catkin_coco/devel/setup.bash
+  roslaunch cocolic odometry.launch config_path:=config/ct_odometry_r3live.yaml
+  ```
+
+Results are saved under `result/` on the host. Each `launch/*.launch` defaults `config_path` to its matching `config/*.yaml`; drop a YAML in `config/` and pass `config_path:=config/yours.yaml` for a custom dataset. The Orin's `config/odin1.yaml` shows the 0.5× (`crop_y`/`width`/`height`) and `point_stride` options — both dormant at full resolution, so `glic-x86` matches the native build.
+
 ## Install
 
 We test on ubuntu 20.04 with an NVIDIA RTX 3090 / 4090.
