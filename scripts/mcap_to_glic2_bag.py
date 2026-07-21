@@ -9,8 +9,8 @@ the canonical ROS1 values `rosbag play` enforces (rosbags' own MD5s differ and
 cause "wrong md5sum" connection drops on replay).
 
 Operations, in one pass:
-  1. nav_msgs/Odometry  -> geometry_msgs/PoseStamped  (/pose_for_gs)
-     (extracts Odometry.pose.pose, keeps header)
+  1. nav_msgs/Odometry OR geometry_msgs/PoseStamped -> PoseStamped (/pose_for_gs)
+     (extracts Odometry.pose.pose, or passes a PoseStamped through; keeps header)
   2. sensor_msgs/PointCloud2 -> /points_for_gs  (type unchanged)
   3. sensor_msgs/Image       -> /image_for_gs   (type unchanged; use the
      UNDISTORTED image topic — config intrinsics assume no distortion)
@@ -92,11 +92,14 @@ def convert(src: str, dst: str, topic_map: dict) -> None:
         msg.is_dense = rb.is_dense
         return msg
 
-    def _odom_to_posestamped(rb):
+    def _pose_to_posestamped(rb):
         msg = PoseStamped()
         msg.header = _header(rb.header)
-        p = rb.pose.pose.position
-        q = rb.pose.pose.orientation
+        # Accept either nav_msgs/Odometry (pose.pose is a Pose nested in a
+        # PoseWithCovariance) or geometry_msgs/PoseStamped (pose is the Pose).
+        pose = rb.pose.pose if hasattr(rb.pose, "pose") else rb.pose
+        p = pose.position
+        q = pose.orientation
         msg.pose.position = Point(p.x, p.y, p.z)
         msg.pose.orientation = Quaternion(q.x, q.y, q.z, q.w)
         return msg
@@ -125,7 +128,7 @@ def convert(src: str, dst: str, topic_map: dict) -> None:
             rb = typestore.deserialize_cdr(rawdata, conn.msgtype)
 
             if conn.topic == pose_src:
-                msg = _odom_to_posestamped(rb)
+                msg = _pose_to_posestamped(rb)
             elif conn.topic == pcd_src:
                 msg = _pointcloud2(rb)
             else:  # image or depth
