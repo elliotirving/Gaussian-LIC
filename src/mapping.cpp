@@ -157,7 +157,8 @@ bool getAlignedData(Frame& cur_frame)
 /// and cannot affect numerical results. Stream format state is saved and
 /// restored so nothing downstream is perturbed. Unknown metadata (experiment
 /// id, dataset, sequence, platform, notes) and the hardcoded iterations/KF are
-/// left as placeholders; depth-error columns are left empty (not measured).
+/// left as placeholders; depth-error columns are left empty here because
+/// canonical depth metrics are computed from result/eval by JetFast eval_core.
 static void printSpreadsheetRows(const std::shared_ptr<GaussianModel>& gaussians,
                                  const std::shared_ptr<Dataset>& dataset,
                                  double total_extending_time,
@@ -193,20 +194,20 @@ static void printSpreadsheetRows(const std::shared_ptr<GaussianModel>& gaussians
     // Test SSIM, Test LPIPS, Test Depth MAE, Test Depth RMSE, Train PSNR,
     // Train SSIM, Train LPIPS, Train Depth MAE, Train Depth RMSE. Test metrics
     // are the In-Sequence Novel View results; train are the Training View
-    // results. Depth-error columns are unmeasured and left empty.
+    // results.
     os << "\n===== COPY TO EVALUATIONS SHEET =====\n";
     os << "<experiment_id>" << TAB          // Experiment
        << "GLIC2" << TAB;                   // Evaluator/renderer
     os << std::fixed << std::setprecision(2) << metrics.test_psnr << TAB;
     os << std::setprecision(3) << metrics.test_ssim << TAB
        << metrics.test_lpips << TAB
-       << TAB                               // Test Depth MAE (empty)
-       << TAB;                              // Test Depth RMSE (empty)
+       << TAB                               // Test Depth MAE (canonical eval_core)
+       << TAB;                              // Test Depth RMSE (canonical eval_core)
     os << std::setprecision(2) << metrics.train_psnr << TAB;
     os << std::setprecision(3) << metrics.train_ssim << TAB
        << metrics.train_lpips << TAB
-       << TAB                               // Train Depth MAE (empty)
-       << "\n";                             // Train Depth RMSE (empty)
+       << TAB                               // Train Depth MAE (canonical eval_core)
+       << "\n";                             // Train Depth RMSE (canonical eval_core)
 
     os.flags(saved_flags);
     os.precision(saved_precision);

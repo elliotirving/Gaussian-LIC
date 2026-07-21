@@ -36,6 +36,8 @@
 #include <limits>
 #include <torch/script.h>
 #include <memory>
+#include <map>
+#include <stdexcept>
 
 namespace fs = std::filesystem;
 
@@ -43,6 +45,108 @@ struct PixelPosition
 {
     int u, v;
 };
+
+namespace
+{
+int frameIndexFromImageName(const std::string& image_name)
+{
+    const size_t underscore = image_name.find('_');
+    const size_t begin = underscore == std::string::npos ? 0 : underscore + 1;
+    const size_t end = image_name.find('.', begin);
+    const std::string digits = image_name.substr(begin, end - begin);
+    if (digits.empty())
+    {
+        throw std::runtime_error("Cannot parse frame index from " + image_name);
+    }
+    return std::stoi(digits);
+}
+
+std::string evalStem(int frame_idx)
+{
+    std::stringstream ss;
+    ss << std::setw(6) << std::setfill('0') << frame_idx;
+    return ss.str();
+}
+
+torch::Tensor asHxW(torch::Tensor tensor)
+{
+    tensor = tensor.detach();
+    while (tensor.dim() > 2 && tensor.size(0) == 1)
+    {
+        tensor = tensor.squeeze(0);
+    }
+    if (tensor.dim() == 3 && tensor.size(2) == 1)
+    {
+        tensor = tensor.squeeze(2);
+    }
+    if (tensor.dim() != 2)
+    {
+        throw std::runtime_error("Expected a HxW depth/alpha tensor");
+    }
+    return tensor.contiguous();
+}
+
+void saveRgbPng(torch::Tensor rgb_chw, const std::string& path)
+{
+    rgb_chw = rgb_chw.detach().clamp(0, 1).to(torch::kCPU).contiguous();
+    const int H = static_cast<int>(rgb_chw.size(1));
+    const int W = static_cast<int>(rgb_chw.size(2));
+    torch::Tensor rgb_hwc = rgb_chw.permute({1, 2, 0}).mul(255).clamp(0, 255).to(torch::kU8).contiguous();
+    cv::Mat rgb(H, W, CV_8UC3, rgb_hwc.data_ptr<uint8_t>());
+    cv::Mat bgr;
+    cv::cvtColor(rgb, bgr, cv::COLOR_RGB2BGR);
+    cv::imwrite(path, bgr);
+}
+
+void saveFloatTiff(torch::Tensor tensor, const std::string& path)
+{
+    torch::Tensor cpu = asHxW(tensor).to(torch::kCPU).to(torch::kFloat32).contiguous();
+    cv::Mat image(static_cast<int>(cpu.size(0)),
+                  static_cast<int>(cpu.size(1)),
+                  CV_32FC1,
+                  cpu.data_ptr<float>());
+    cv::imwrite(path, image);
+}
+
+void saveDepthPreviewPng(torch::Tensor depth, const std::string& path)
+{
+    torch::Tensor cpu = asHxW(depth).to(torch::kCPU).to(torch::kFloat32).contiguous();
+    torch::Tensor finite = torch::isfinite(cpu);
+    torch::Tensor preview = torch::zeros_like(cpu);
+    if (finite.sum().item<int64_t>() > 0)
+    {
+        torch::Tensor values = cpu.masked_select(finite);
+        const float min_depth = values.min().item<float>();
+        const float max_depth = values.max().item<float>();
+        if (max_depth > min_depth)
+        {
+            preview = (cpu - min_depth) / (max_depth - min_depth) * 255.0f;
+            preview = torch::where(finite, preview, torch::zeros_like(preview));
+        }
+    }
+    cv::Mat gray(static_cast<int>(preview.size(0)),
+                 static_cast<int>(preview.size(1)),
+                 CV_32FC1,
+                 preview.data_ptr<float>());
+    gray.convertTo(gray, CV_8UC1);
+    cv::Mat color;
+    cv::applyColorMap(gray, color, cv::COLORMAP_JET);
+    cv::imwrite(path, color);
+}
+
+std::string cameraKey(const std::shared_ptr<Camera>& cam)
+{
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(9)
+       << cam->image_width_ << ":"
+       << cam->image_height_ << ":"
+       << cam->fx_ << ":"
+       << cam->fy_ << ":"
+       << cam->cx_ << ":"
+       << cam->cy_;
+    return ss.str();
+}
+}  // namespace
 
 std::vector<PixelPosition> selectFromDepthCompletion(const cv::Mat& depth_A, const cv::Mat& depth_B, int patch_size = 20) 
 {
@@ -230,7 +334,7 @@ void Dataset::addFrame(Frame& cur_frame)
         std::stringstream ss;
         ss << std::setw(4) << std::setfill('0') << all_frame_num_;
         std::string formatted_str = ss.str();
-        cam->image_name_ = "train_" + formatted_str + ".jpg";
+        cam->image_name_ = "train_" + formatted_str + ".png";
 
         cam->setIntrinsic(width, height, fx_, fy_, cx_, cy_);
         cam->setPose(q_wc.toRotationMatrix(), t_wc);
@@ -248,7 +352,7 @@ void Dataset::addFrame(Frame& cur_frame)
         std::stringstream ss;
         ss << std::setw(4) << std::setfill('0') << all_frame_num_;
         std::string formatted_str = ss.str();
-        cam->image_name_ = "test_" + formatted_str + ".jpg";
+        cam->image_name_ = "test_" + formatted_str + ".png";
 
         cam->setIntrinsic(width, height, fx_, fy_, cx_, cy_);
         cam->setPose(q_wc.toRotationMatrix(), t_wc);
@@ -919,121 +1023,103 @@ VisualQualityMetrics evaluateVisualQuality(const std::shared_ptr<Dataset>& datas
     fs::create_directories(render_depth_dir_path);
     std::string gt_dir_path = result_path + "/gt";
     fs::create_directories(gt_dir_path);
+    std::string eval_gt_rgb_dir = result_path + "/eval/gt/rgb";
+    std::string eval_gt_depth_dir = result_path + "/eval/gt/depth";
+    std::string eval_render_rgb_dir = result_path + "/eval/renders/rgb";
+    std::string eval_render_depth_dir = result_path + "/eval/renders/depth";
+    std::string eval_render_alpha_dir = result_path + "/eval/renders/alpha";
+    fs::create_directories(eval_gt_rgb_dir);
+    fs::create_directories(eval_gt_depth_dir);
+    fs::create_directories(eval_render_rgb_dir);
+    fs::create_directories(eval_render_depth_dir);
+    fs::create_directories(eval_render_alpha_dir);
 
     torch::Tensor bg;
     if (pc->white_background_) bg = torch::ones({3}, torch::kFloat32).cuda();
     else bg = torch::zeros({3}, torch::kFloat32).cuda();
     torch::jit::script::Module m_lpips;
+    bool lpips_loaded = false;
     try 
     {
         m_lpips = torch::jit::load(lpips_path + "/lpips_alex.pt");
         m_lpips.to(torch::kCUDA);
+        lpips_loaded = true;
     }
     catch (const c10::Error& e) 
     {
         std::cerr << "lpips model loading failed: " << e.what() << std::endl;
     }
+    if (!lpips_loaded)
+    {
+        throw std::runtime_error("LPIPS model loading failed; cannot evaluate visual quality.");
+    }
 
+    struct SplitAccum
     {
         double psnrs = 0;
         double ssims = 0;
         double lpipss = 0;
-        for (const auto& train_camera : dataset->train_cameras_)
+        int rgb_n = 0;
+    };
+
+    const auto average = [](double sum, int n) {
+        return n > 0 ? sum / static_cast<double>(n) : 0.0;
+    };
+
+    const auto evaluate_split =
+        [&](const std::vector<std::shared_ptr<Camera>>& cameras,
+            const std::string& name) -> SplitAccum
         {
-            auto render_pkg = render(train_camera, pc, bg, pc->apply_exposure_);
-            auto rendered_image = std::get<0>(render_pkg).clamp(0, 1);
-            auto rendered_depth = std::get<1>(render_pkg);
-            auto gt_image = train_camera->original_image_.cuda().clamp(0, 1);
-            double psnr = loss_utils::psnr(rendered_image, gt_image).mean().item<double>();
-            double ssim = loss_utils::ssim(rendered_image, gt_image).item<double>();
-            std::vector<torch::jit::IValue> inputs;
-            inputs.push_back(rendered_image.unsqueeze(0));
-            inputs.push_back(gt_image.unsqueeze(0));
-            double lpips = m_lpips.forward(inputs).toTensor().item<double>();
-            psnrs += psnr;
-            ssims += ssim;
-            lpipss += lpips;
+            SplitAccum accum;
+            for (const auto& camera : cameras)
+            {
+                auto render_pkg = render(camera, pc, bg, pc->apply_exposure_);
+                auto rendered_image = std::get<0>(render_pkg).clamp(0, 1);
+                auto rendered_depth = std::get<1>(render_pkg);
+                auto rendered_final_T = std::get<2>(render_pkg);
+                auto gt_image = camera->original_image_.cuda().clamp(0, 1);
+                double psnr = loss_utils::psnr(rendered_image, gt_image).mean().item<double>();
+                double ssim = loss_utils::ssim(rendered_image, gt_image).item<double>();
+                std::vector<torch::jit::IValue> inputs;
+                inputs.push_back(rendered_image.unsqueeze(0));
+                inputs.push_back(gt_image.unsqueeze(0));
+                double lpips = m_lpips.forward(inputs).toTensor().item<double>();
+                accum.psnrs += psnr;
+                accum.ssims += ssim;
+                accum.lpipss += lpips;
+                accum.rgb_n += 1;
 
-            int H = rendered_image.size(1), W = rendered_image.size(2);
+                const int frame_idx = frameIndexFromImageName(camera->image_name_);
+                const std::string stem = evalStem(frame_idx);
+                saveRgbPng(rendered_image, render_dir_path + "/" + camera->image_name_);
+                saveRgbPng(gt_image, gt_dir_path + "/" + camera->image_name_);
+                saveRgbPng(rendered_image, eval_render_rgb_dir + "/" + stem + ".png");
+                saveRgbPng(gt_image, eval_gt_rgb_dir + "/" + stem + ".png");
+                saveFloatTiff(rendered_depth, eval_render_depth_dir + "/" + stem + ".tiff");
+                saveFloatTiff(camera->original_depth_, eval_gt_depth_dir + "/" + stem + ".tiff");
+                saveFloatTiff((torch::ones_like(rendered_final_T) - rendered_final_T).clamp(0, 1),
+                              eval_render_alpha_dir + "/" + stem + ".tiff");
+                saveDepthPreviewPng(rendered_depth, render_depth_dir_path + "/" + camera->image_name_);
+            }
+            std::cout << std::fixed << std::setprecision(2)
+                      << "        [" << name << " PSNR] " << average(accum.psnrs, accum.rgb_n) << std::endl;
+            std::cout << std::fixed << std::setprecision(3)
+                      << "        [" << name << " SSIM] " << average(accum.ssims, accum.rgb_n) << std::endl;
+            std::cout << std::fixed << std::setprecision(3)
+                      << "        [" << name << " LPIPS] " << average(accum.lpipss, accum.rgb_n) << std::endl;
+            return accum;
+        };
 
-            torch::Tensor a_cpu = rendered_image.to(torch::kCPU).permute({1, 2, 0}).contiguous();
-            a_cpu = a_cpu.mul(255).clamp(0, 255).to(torch::kU8);
-            cv::Mat a_img(H, W, CV_8UC3, a_cpu.data_ptr<uint8_t>());
-            cv::cvtColor(a_img, a_img, cv::COLOR_RGB2BGR);
-            cv::imwrite(render_dir_path + "/" + train_camera->image_name_, a_img);
+    SplitAccum train = evaluate_split(dataset->train_cameras_, "Training View");
+    metrics.train_psnr = average(train.psnrs, train.rgb_n);
+    metrics.train_ssim = average(train.ssims, train.rgb_n);
+    metrics.train_lpips = average(train.lpipss, train.rgb_n);
 
-            torch::Tensor b_cpu = gt_image.to(torch::kCPU).permute({1, 2, 0}).contiguous();
-            b_cpu = b_cpu.mul(255).clamp(0, 255).to(torch::kU8);
-            cv::Mat b_img(H, W, CV_8UC3, b_cpu.data_ptr<uint8_t>());
-            cv::cvtColor(b_img, b_img, cv::COLOR_RGB2BGR);
-            cv::imwrite(gt_dir_path + "/" + train_camera->image_name_, b_img);
+    SplitAccum test = evaluate_split(dataset->test_cameras_, "In-Sequence Novel View");
+    metrics.test_psnr = average(test.psnrs, test.rgb_n);
+    metrics.test_ssim = average(test.ssims, test.rgb_n);
+    metrics.test_lpips = average(test.lpipss, test.rgb_n);
 
-            torch::Tensor depth_map_normalized = (rendered_depth - rendered_depth.min()) / 
-                                                     (rendered_depth.max() - rendered_depth.min()) * 255;
-            torch::Tensor c_cpu = depth_map_normalized.to(torch::kCPU);
-            cv::Mat c_img(H, W, CV_32FC1, c_cpu.data_ptr<float>());
-            c_img.convertTo(c_img, CV_8UC1);
-            cv::applyColorMap(c_img, c_img, cv::COLORMAP_JET);
-            cv::imwrite(render_depth_dir_path + "/" + train_camera->image_name_, c_img);
-        }
-        psnrs /= dataset->train_cameras_.size();
-        ssims /= dataset->train_cameras_.size();
-        lpipss /= dataset->train_cameras_.size();
-        std::cout << std::fixed << std::setprecision(2) << "        [Training View PSNR] " << psnrs << std::endl;
-        std::cout << std::fixed << std::setprecision(3) << "        [Training View SSIM] " << ssims << std::endl;
-        std::cout << std::fixed << std::setprecision(3) << "        [Training View LPIPS] " << lpipss << std::endl;
-        metrics.train_psnr = psnrs; metrics.train_ssim = ssims; metrics.train_lpips = lpipss;
-    }
-    {
-        double psnrs = 0;
-        double ssims = 0;
-        double lpipss = 0;
-        for (const auto& test_camera : dataset->test_cameras_)
-        {
-            auto render_pkg = render(test_camera, pc, bg, pc->apply_exposure_);
-            auto rendered_image = std::get<0>(render_pkg).clamp(0, 1);
-            auto rendered_depth = std::get<1>(render_pkg);
-            auto gt_image = test_camera->original_image_.cuda().clamp(0, 1);
-            double psnr = loss_utils::psnr(rendered_image, gt_image).mean().item<double>();
-            double ssim = loss_utils::ssim(rendered_image, gt_image).item<double>();
-            std::vector<torch::jit::IValue> inputs;
-            inputs.push_back(rendered_image.unsqueeze(0));
-            inputs.push_back(gt_image.unsqueeze(0));
-            double lpips = m_lpips.forward(inputs).toTensor().item<double>();
-            psnrs += psnr;
-            ssims += ssim;
-            lpipss += lpips;
-
-            int H = rendered_image.size(1), W = rendered_image.size(2);
-
-            torch::Tensor a_cpu = rendered_image.to(torch::kCPU).permute({1, 2, 0}).contiguous();
-            a_cpu = a_cpu.mul(255).clamp(0, 255).to(torch::kU8);
-            cv::Mat a_img(H, W, CV_8UC3, a_cpu.data_ptr<uint8_t>());
-            cv::cvtColor(a_img, a_img, cv::COLOR_RGB2BGR);
-            cv::imwrite(render_dir_path + "/" + test_camera->image_name_, a_img);
-
-            torch::Tensor b_cpu = gt_image.to(torch::kCPU).permute({1, 2, 0}).contiguous();
-            b_cpu = b_cpu.mul(255).clamp(0, 255).to(torch::kU8);
-            cv::Mat b_img(H, W, CV_8UC3, b_cpu.data_ptr<uint8_t>());
-            cv::cvtColor(b_img, b_img, cv::COLOR_RGB2BGR);
-            cv::imwrite(gt_dir_path + "/" + test_camera->image_name_, b_img);
-
-            torch::Tensor depth_map_normalized = (rendered_depth - rendered_depth.min()) / 
-                                                     (rendered_depth.max() - rendered_depth.min()) * 255;
-            torch::Tensor c_cpu = depth_map_normalized.to(torch::kCPU);
-            cv::Mat c_img(H, W, CV_32FC1, c_cpu.data_ptr<float>());
-            c_img.convertTo(c_img, CV_8UC1);
-            cv::applyColorMap(c_img, c_img, cv::COLORMAP_JET);
-            cv::imwrite(render_depth_dir_path + "/" + test_camera->image_name_, c_img);
-        }
-        psnrs /= dataset->test_cameras_.size();
-        ssims /= dataset->test_cameras_.size();
-        lpipss /= dataset->test_cameras_.size();
-        std::cout << std::fixed << std::setprecision(2) << "        [In-Sequence Novel View PSNR] " << psnrs << std::endl;
-        std::cout << std::fixed << std::setprecision(3) << "        [In-Sequence Novel View SSIM] " << ssims << std::endl;
-        std::cout << std::fixed << std::setprecision(3) << "        [In-Sequence Novel View LPIPS] " << lpipss << std::endl;
-        metrics.test_psnr = psnrs; metrics.test_ssim = ssims; metrics.test_lpips = lpipss;
-    }
     return metrics;
 }
 
@@ -1049,12 +1135,12 @@ void saveFrameSequence(const std::shared_ptr<Dataset>& dataset,
     std::vector<CamEntry> all_cams;
     for (auto& c : dataset->train_cameras_)
     {
-        int idx = std::stoi(c->image_name_.substr(6, 4));  // "train_XXXX.jpg"
+        int idx = frameIndexFromImageName(c->image_name_);
         all_cams.push_back({c, "train", idx});
     }
     for (auto& c : dataset->test_cameras_)
     {
-        int idx = std::stoi(c->image_name_.substr(5, 4));  // "test_XXXX.jpg"
+        int idx = frameIndexFromImageName(c->image_name_);
         all_cams.push_back({c, "test", idx});
     }
 
@@ -1097,4 +1183,85 @@ void saveFrameSequence(const std::shared_ptr<Dataset>& dataset,
 
     std::cout << "[saveFrameSequence] Saved " << all_cams.size()
               << " cameras to " << json_path << std::endl;
+
+    std::string eval_dir = result_path + "/eval";
+    fs::create_directories(eval_dir);
+
+    std::map<std::string, int> camera_ids;
+    std::vector<std::shared_ptr<Camera>> unique_cameras;
+    std::vector<int> entry_camera_ids;
+    entry_camera_ids.reserve(all_cams.size());
+    for (const auto& entry : all_cams)
+    {
+        const std::string key = cameraKey(entry.cam);
+        auto it = camera_ids.find(key);
+        if (it == camera_ids.end())
+        {
+            int id = static_cast<int>(unique_cameras.size());
+            camera_ids[key] = id;
+            unique_cameras.push_back(entry.cam);
+            entry_camera_ids.push_back(id);
+        }
+        else
+        {
+            entry_camera_ids.push_back(it->second);
+        }
+    }
+
+    std::string eval_cameras_path = eval_dir + "/cameras.json";
+    std::ofstream cf(eval_cameras_path);
+    cf << std::fixed << std::setprecision(10);
+    cf << "[\n";
+    for (size_t i = 0; i < unique_cameras.size(); ++i)
+    {
+        const auto& cam = unique_cameras[i];
+        cf << "  {\n";
+        cf << "    \"id\": " << i << ",\n";
+        cf << "    \"width\": " << cam->image_width_ << ",\n";
+        cf << "    \"height\": " << cam->image_height_ << ",\n";
+        cf << "    \"fx\": " << cam->fx_ << ",\n";
+        cf << "    \"fy\": " << cam->fy_ << ",\n";
+        cf << "    \"cx\": " << cam->cx_ << ",\n";
+        cf << "    \"cy\": " << cam->cy_ << ",\n";
+        cf << "    \"k1\": 0.0, \"k2\": 0.0, \"p1\": 0.0, \"p2\": 0.0, \"k3\": 0.0,\n";
+        cf << "    \"position\": [0.0, 0.0, 0.0],\n";
+        cf << "    \"rotation\": [[1,0,0],[0,1,0],[0,0,1]]\n";
+        cf << "  }";
+        if (i + 1 < unique_cameras.size()) cf << ",";
+        cf << "\n";
+    }
+    cf << "]\n";
+    cf.close();
+
+    std::string eval_manifest_path = eval_dir + "/manifest.json";
+    std::ofstream mf(eval_manifest_path);
+    mf << std::fixed << std::setprecision(10);
+    mf << "{\n";
+    mf << "  \"source\": \"Gaussian-LIC native renderer\",\n";
+    mf << "  \"frame_index_convention\": \"original input frame index\",\n";
+    mf << "  \"frames\": [\n";
+    for (size_t i = 0; i < all_cams.size(); ++i)
+    {
+        const auto& entry = all_cams[i];
+        const auto& cam = entry.cam;
+        Eigen::Quaterniond q_cw(cam->R_cw_);
+        q_cw.normalize();
+        mf << "    {\n";
+        mf << "      \"seq_idx\": " << entry.frame_idx << ",\n";
+        mf << "      \"is_test\": " << (entry.type == "test" ? "true" : "false") << ",\n";
+        mf << "      \"camera_id\": " << entry_camera_ids[i] << ",\n";
+        mf << "      \"image_name\": \"" << cam->image_name_ << "\",\n";
+        mf << "      \"T_CW_qwxyz_txyz\": ["
+           << q_cw.w() << ", " << q_cw.x() << ", " << q_cw.y() << ", " << q_cw.z() << ", "
+           << cam->t_cw_(0) << ", " << cam->t_cw_(1) << ", " << cam->t_cw_(2) << "]\n";
+        mf << "    }";
+        if (i + 1 < all_cams.size()) mf << ",";
+        mf << "\n";
+    }
+    mf << "  ]\n";
+    mf << "}\n";
+    mf.close();
+
+    std::cout << "[saveFrameSequence] Saved normalized eval metadata to "
+              << eval_manifest_path << std::endl;
 }
