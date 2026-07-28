@@ -24,7 +24,9 @@
 #include <condition_variable>
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <iomanip>
+#include <system_error>
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -36,7 +38,6 @@
 #if GAUSSIAN_LIC_ENABLE_ONLINE_METRICS
 #include <algorithm>
 #include <cmath>
-#include <filesystem>
 #include <fstream>
 #include <vector>
 
@@ -47,6 +48,44 @@
 #define GLIC_STAT_TYPE_NS c10::cuda::CUDACachingAllocator
 #endif
 #endif
+
+namespace
+{
+void saveRunConfigCopy(const std::string& config_path, const std::string& result_path)
+{
+    if (config_path.empty() || result_path.empty())
+    {
+        return;
+    }
+
+    const std::filesystem::path source_path(config_path);
+    const std::filesystem::path destination_path =
+        std::filesystem::path(result_path) / "config.yaml";
+
+    std::error_code ec;
+    std::filesystem::create_directories(destination_path.parent_path(), ec);
+    if (ec)
+    {
+        std::cerr << "[run config] Failed to create result directory: "
+                  << ec.message() << std::endl;
+        return;
+    }
+
+    std::filesystem::copy_file(source_path, destination_path,
+                               std::filesystem::copy_options::overwrite_existing,
+                               ec);
+    if (ec)
+    {
+        std::cerr << "[run config] Failed to copy " << source_path
+                  << " to " << destination_path << ": "
+                  << ec.message() << std::endl;
+        return;
+    }
+
+    std::cout << "[run config] Saved config copy to "
+              << destination_path << std::endl;
+}
+}  // namespace
 
 std::mutex m_buf;
 std::condition_variable con;
@@ -395,7 +434,8 @@ static void printSpreadsheetRows(const std::shared_ptr<GaussianModel>& gaussians
     os.precision(saved_precision);
 }
 
-void mapping(const YAML::Node& node, const std::string& result_path, const std::string& lpips_path)
+void mapping(const YAML::Node& node, const std::string& config_path,
+             const std::string& result_path, const std::string& lpips_path)
 {
     torch::jit::setGraphExecutorOptimize(false);
 
@@ -641,6 +681,7 @@ void mapping(const YAML::Node& node, const std::string& result_path, const std::
     printSpreadsheetRows(gaussians, dataset, total_extending_time, metrics);
     gaussians->saveMap(result_path);
     saveFrameSequence(dataset, result_path);
+    saveRunConfigCopy(config_path, result_path);
 #if GAUSSIAN_LIC_ENABLE_ONLINE_METRICS
     writeOnlineMetricsCsv(online_metrics, result_path);
 #endif
@@ -670,7 +711,7 @@ int main(int argc, char** argv)
     std::string lpips_path;
     nh.param<std::string>("lpips_path", lpips_path, "");
 
-    std::thread mapping_process(mapping, config_node, result_path, lpips_path);
+    std::thread mapping_process(mapping, config_node, config_path, result_path, lpips_path);
     std::thread monitor_thread([](){
         while (!exit_flag)
         {
