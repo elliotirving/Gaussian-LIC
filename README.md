@@ -58,6 +58,15 @@ docker compose -f docker/docker-compose.yml run --rm --name glic <svc> /usr/loca
 docker compose -f docker/docker-compose.yml run --rm --name glic <svc> /usr/local/bin/build_engine.sh
 ```
 
+Online metrics logging is off by default. From inside the container, build with
+metrics enabled using:
+
+```bash
+GAUSSIAN_LIC_ENABLE_ONLINE_METRICS=ON ./docker/build_ws.sh
+```
+
+Running `build_ws.sh` without that variable builds with metrics off.
+
 **Run** — one terminal owns the container, others attach (they share one ROS master via `network_mode: host`):
 
 ```bash
@@ -156,6 +165,13 @@ We test on ubuntu 20.04 with an NVIDIA RTX 3090 / 4090.
    cd ~/catkin_gaussian/src
    git clone https://github.com/APRIL-ZJU/Gaussian-LIC.git
    cd ~/catkin_gaussian && catkin_make
+   ```
+
+   To build the native workspace with online metrics enabled:
+
+   ```shell
+   cd ~/catkin_gaussian
+   catkin_make -DGAUSSIAN_LIC_ENABLE_ONLINE_METRICS=ON
    ```
 
 9. TensorRT Deployment.

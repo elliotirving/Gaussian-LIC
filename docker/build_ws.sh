@@ -63,6 +63,12 @@ fi
 [ -n "${GAUSSIAN_LIC_CUDA_ARCH:-}" ] && \
   FLAGS+=( -DGAUSSIAN_LIC_CUDA_ARCH="${GAUSSIAN_LIC_CUDA_ARCH}" )
 
+# Optional runtime eval instrumentation. The explicit OFF keeps a cached
+# catkin build from accidentally preserving a previous metrics-enabled build.
+FLAGS+=(
+  -DGAUSSIAN_LIC_ENABLE_ONLINE_METRICS="${GAUSSIAN_LIC_ENABLE_ONLINE_METRICS:-OFF}"
+)
+
 # CMake 4.x / conda-forge compatibility shims (orin only). CMP0167/CMP0148 don't
 # exist on x86's older CMake, so they are gated rather than always passed.
 if [ "${GLIC_CMAKE_LEGACY_POLICIES:-0}" = "1" ]; then

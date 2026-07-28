@@ -6,6 +6,9 @@ SET(CMAKE_BUILD_TYPE "Release")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g -Wno-sign-compare -Wno-unused -Wno-comment -pthread")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+option(GAUSSIAN_LIC_ENABLE_ONLINE_METRICS
+       "Write JetFast-compatible online mapping metrics.csv at shutdown"
+       OFF)
 # -msse4.2 is x86-only and breaks the aarch64 (Jetson Orin) build. Apply SIMD
 # flags per host architecture instead.
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
@@ -107,11 +110,11 @@ include_directories(
   ${CUDA_INCLUDE_DIRS}
 )
 
-add_executable(gs_mapping 
-              ${PROJECT_SOURCE_DIR}/src/mapping.cpp 
+add_executable(gs_mapping
+              ${PROJECT_SOURCE_DIR}/src/mapping.cpp
               ${PROJECT_SOURCE_DIR}/src/gaussian.cpp
               ${PROJECT_SOURCE_DIR}/src/tinyply.cpp
-              ${PROJECT_SOURCE_DIR}/src/depth_completer.cpp 
+              ${PROJECT_SOURCE_DIR}/src/depth_completer.cpp
               ${PROJECT_SOURCE_DIR}/src/simple-knn/spatial.cu
               ${PROJECT_SOURCE_DIR}/src/simple-knn/simple_knn.cu
               ${PROJECT_SOURCE_DIR}/src/fused-ssim/ssim.cu
@@ -122,6 +125,11 @@ add_executable(gs_mapping
               ${PROJECT_SOURCE_DIR}/src/rasterizer/cuda_rasterizer/forward.cu
               ${PROJECT_SOURCE_DIR}/src/rasterizer/cuda_rasterizer/backward.cu
               ${PROJECT_SOURCE_DIR}/src/rasterizer/cuda_rasterizer/rasterizer_impl.cu)
+if(GAUSSIAN_LIC_ENABLE_ONLINE_METRICS)
+  target_compile_definitions(gs_mapping PRIVATE GAUSSIAN_LIC_ENABLE_ONLINE_METRICS=1)
+else()
+  target_compile_definitions(gs_mapping PRIVATE GAUSSIAN_LIC_ENABLE_ONLINE_METRICS=0)
+endif()
 # Resolve TensorRT libs by name so we pick up either the desktop tarball layout
 # or JetPack's multiarch system libs. libnvparsers was REMOVED in TensorRT 10
 # (JetPack 6.x), so it is linked only when actually present.
