@@ -23,6 +23,7 @@
 #include <fstream>
 #include <unordered_map>
 #include <cmath>
+#include <cstdint>
 
 #include <opencv2/calib3d.hpp>
 #include <torch/torch.h>
@@ -117,8 +118,10 @@ public:
 
 public:
     std::string image_name_;
+    double timestamp_ = 0.0;  ///< capture time of the source image, sensor clock
+    std::int64_t rgb_timestamp_ns_ = 0;  ///< exact source image timestamp
 
-    int image_width_;              
+    int image_width_;
     int image_height_;
     torch::Tensor original_image_;
     torch::Tensor original_depth_;

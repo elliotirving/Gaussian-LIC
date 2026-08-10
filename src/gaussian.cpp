@@ -335,6 +335,9 @@ void Dataset::addFrame(Frame& cur_frame)
         ss << std::setw(4) << std::setfill('0') << all_frame_num_;
         std::string formatted_str = ss.str();
         cam->image_name_ = "train_" + formatted_str + ".png";
+        cam->timestamp_ = cur_frame.image_msg->header.stamp.toSec();
+        cam->rgb_timestamp_ns_ = static_cast<std::int64_t>(
+            cur_frame.image_msg->header.stamp.toNSec());
 
         cam->setIntrinsic(width, height, fx_, fy_, cx_, cy_);
         cam->setPose(q_wc.toRotationMatrix(), t_wc);
@@ -353,6 +356,9 @@ void Dataset::addFrame(Frame& cur_frame)
         ss << std::setw(4) << std::setfill('0') << all_frame_num_;
         std::string formatted_str = ss.str();
         cam->image_name_ = "test_" + formatted_str + ".png";
+        cam->timestamp_ = cur_frame.image_msg->header.stamp.toSec();
+        cam->rgb_timestamp_ns_ = static_cast<std::int64_t>(
+            cur_frame.image_msg->header.stamp.toNSec());
 
         cam->setIntrinsic(width, height, fx_, fy_, cx_, cy_);
         cam->setPose(q_wc.toRotationMatrix(), t_wc);
@@ -1251,6 +1257,8 @@ void saveFrameSequence(const std::shared_ptr<Dataset>& dataset,
         mf << "      \"is_test\": " << (entry.type == "test" ? "true" : "false") << ",\n";
         mf << "      \"camera_id\": " << entry_camera_ids[i] << ",\n";
         mf << "      \"image_name\": \"" << cam->image_name_ << "\",\n";
+        mf << "      \"timestamp_ns\": " << cam->rgb_timestamp_ns_ << ",\n";
+        mf << "      \"rgb_timestamp_ns\": " << cam->rgb_timestamp_ns_ << ",\n";
         mf << "      \"T_CW_qwxyz_txyz\": ["
            << q_cw.w() << ", " << q_cw.x() << ", " << q_cw.y() << ", " << q_cw.z() << ", "
            << cam->t_cw_(0) << ", " << cam->t_cw_(1) << ", " << cam->t_cw_(2) << "]\n";
