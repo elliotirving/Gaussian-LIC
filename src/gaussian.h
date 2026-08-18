@@ -80,6 +80,13 @@ public:
     int target_height_;
     int crop_y_;         // pixels cropped from top AND bottom before resize (keeps scale uniform)
 
+    // Raw incoming frame geometry, captured once on the first addFrame(). The
+    // native (scale-1) evaluation camera is derived from these plus crop_y_, so
+    // it can never drift from the training geometry above. 0 until a frame
+    // arrives.
+    int source_width_ = 0;
+    int source_height_ = 0;
+
     int all_frame_num_;
     bool is_keyframe_current_;
 

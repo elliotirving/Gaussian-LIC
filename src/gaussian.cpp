@@ -146,6 +146,37 @@ std::string cameraKey(const std::shared_ptr<Camera>& cam)
        << cam->cy_;
     return ss.str();
 }
+
+/// Camera geometry at full input resolution, for evaluation only.
+struct EvalGeometry
+{
+    int width;
+    int height;
+    double inverse_scale;  // multiply training intrinsics by this
+};
+
+EvalGeometry evaluationGeometry(const std::shared_ptr<Dataset>& dataset)
+{
+    if (dataset->source_width_ <= 0 || dataset->source_height_ <= 0)
+        throw std::runtime_error("evaluationGeometry: no frame was ingested, raw geometry unknown");
+
+    const int width = dataset->source_width_;
+    const int height = dataset->source_height_ - 2 * dataset->crop_y_;
+    if (height <= 0)
+        throw std::runtime_error("evaluationGeometry: crop_y removes every row");
+
+    const double x_scale = static_cast<double>(dataset->target_width_) / width;
+    const double y_scale = static_cast<double>(dataset->target_height_) / height;
+    if (std::abs(x_scale - y_scale) > 1e-9)
+        throw std::runtime_error(
+            "evaluationGeometry: training resize is not uniform (x " + std::to_string(x_scale) +
+            " vs y " + std::to_string(y_scale) + "); fix crop_y/width/height in the config");
+    if (x_scale <= 0.0)
+        throw std::runtime_error("evaluationGeometry: non-positive training scale");
+
+    return EvalGeometry{width, height, 1.0 / x_scale};
+}
+
 }  // namespace
 
 std::vector<PixelPosition> selectFromDepthCompletion(const cv::Mat& depth_A, const cv::Mat& depth_B, int patch_size = 20) 
@@ -222,6 +253,14 @@ void Dataset::addFrame(Frame& cur_frame)
     cv_bridge::CvImagePtr dp_ptr;
     dp_ptr = cv_bridge::toCvCopy(cur_frame.depth_msg, sensor_msgs::image_encodings::TYPE_32FC1);
     cv::Mat depth_map = dp_ptr->image;  // metric float32
+
+    /// Record the size of the incoming image once, before it is cropped or
+    /// resized below. For evaluationGeometry() to recover full-res intrinsics.
+    if (source_width_ == 0)
+    {
+        source_width_ = image_rgb.cols;
+        source_height_ = image_rgb.rows;
+    }
 
     /// Crop then resize to the target training resolution defined in the config.
     /// crop_y_ (pixels off each of top AND bottom) must be applied BEFORE the
@@ -1214,6 +1253,16 @@ void saveFrameSequence(const std::shared_ptr<Dataset>& dataset,
         }
     }
 
+    /// The evaluation camera table is native scale-1, not the training
+    /// resolution: the exported PLY is a resolution-independent 3D scene, and
+    /// scoring it against native-resolution ground truth is what makes the
+    /// numbers comparable with other methods. Training is unaffected.
+    const EvalGeometry eval_geometry = evaluationGeometry(dataset);
+    std::cout << "[saveFrameSequence] Evaluation cameras are scale-1: "
+              << eval_geometry.width << "x" << eval_geometry.height << " (training "
+              << dataset->target_width_ << "x" << dataset->target_height_ << ", crop_y "
+              << dataset->crop_y_ << ")" << std::endl;
+
     std::string eval_cameras_path = eval_dir + "/cameras.json";
     std::ofstream cf(eval_cameras_path);
     cf << std::fixed << std::setprecision(10);
@@ -1223,12 +1272,12 @@ void saveFrameSequence(const std::shared_ptr<Dataset>& dataset,
         const auto& cam = unique_cameras[i];
         cf << "  {\n";
         cf << "    \"id\": " << i << ",\n";
-        cf << "    \"width\": " << cam->image_width_ << ",\n";
-        cf << "    \"height\": " << cam->image_height_ << ",\n";
-        cf << "    \"fx\": " << cam->fx_ << ",\n";
-        cf << "    \"fy\": " << cam->fy_ << ",\n";
-        cf << "    \"cx\": " << cam->cx_ << ",\n";
-        cf << "    \"cy\": " << cam->cy_ << ",\n";
+        cf << "    \"width\": " << eval_geometry.width << ",\n";
+        cf << "    \"height\": " << eval_geometry.height << ",\n";
+        cf << "    \"fx\": " << cam->fx_ * eval_geometry.inverse_scale << ",\n";
+        cf << "    \"fy\": " << cam->fy_ * eval_geometry.inverse_scale << ",\n";
+        cf << "    \"cx\": " << cam->cx_ * eval_geometry.inverse_scale << ",\n";
+        cf << "    \"cy\": " << cam->cy_ * eval_geometry.inverse_scale << ",\n";
         cf << "    \"k1\": 0.0, \"k2\": 0.0, \"p1\": 0.0, \"p2\": 0.0, \"k3\": 0.0,\n";
         cf << "    \"position\": [0.0, 0.0, 0.0],\n";
         cf << "    \"rotation\": [[1,0,0],[0,1,0],[0,0,1]]\n";

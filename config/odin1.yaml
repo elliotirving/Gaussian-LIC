@@ -9,6 +9,12 @@
 #   full (1600x1296): fx 731.65365411  fy 731.47500576  cx 824.87886602  cy 715.18588323
 #   crop top+bot 8px: cy_src = 715.186 - 8 = 707.186
 #   scale 0.5x:       fx/2, fy/2, cx/2, cy_cropped/2
+#
+# eval/cameras.json is written at full input resolution, not the training
+# resolution below. Nothing extra is configured for it: Dataset::addFrame()
+# measures the incoming image straight off the ROS topic (before any crop or
+# resize), and evaluationGeometry() undoes crop_y and the resize to recover
+# the full-resolution intrinsics. Training is unaffected.
 crop_y: 8
 width: 800
 height: 640

@@ -14,6 +14,12 @@
 # src/mapping.h). The other built engines are 640x512 and 800x640.
 #
 #   scale 4/9:  fx/fy/cx/cy * 4/9   (crop_y = 0)
+#
+# eval/cameras.json is written at full input resolution, not the training
+# resolution below. Nothing extra is configured for it: Dataset::addFrame()
+# measures the incoming image straight off the ROS topic (before any crop or
+# resize), and evaluationGeometry() undoes crop_y and the resize to recover
+# the full-resolution intrinsics. Training is unaffected.
 crop_y: 0
 width: 640
 height: 480
