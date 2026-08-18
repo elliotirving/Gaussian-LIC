@@ -61,13 +61,6 @@ int frameIndexFromImageName(const std::string& image_name)
     return std::stoi(digits);
 }
 
-std::string evalStem(int frame_idx)
-{
-    std::stringstream ss;
-    ss << std::setw(6) << std::setfill('0') << frame_idx;
-    return ss.str();
-}
-
 torch::Tensor asHxW(torch::Tensor tensor)
 {
     tensor = tensor.detach();
@@ -1068,16 +1061,18 @@ VisualQualityMetrics evaluateVisualQuality(const std::shared_ptr<Dataset>& datas
     fs::create_directories(render_depth_dir_path);
     std::string gt_dir_path = result_path + "/gt";
     fs::create_directories(gt_dir_path);
-    std::string eval_gt_rgb_dir = result_path + "/eval/gt/rgb";
-    std::string eval_gt_depth_dir = result_path + "/eval/gt/depth";
-    std::string eval_render_rgb_dir = result_path + "/eval/renders/rgb";
-    std::string eval_render_depth_dir = result_path + "/eval/renders/depth";
-    std::string eval_render_alpha_dir = result_path + "/eval/renders/alpha";
-    fs::create_directories(eval_gt_rgb_dir);
-    fs::create_directories(eval_gt_depth_dir);
-    fs::create_directories(eval_render_rgb_dir);
-    fs::create_directories(eval_render_depth_dir);
-    fs::create_directories(eval_render_alpha_dir);
+
+    // Rendering in a format that JetFast can resolve for evaluation, overkill
+    // std::string eval_gt_rgb_dir = result_path + "/eval/gt/rgb";
+    // std::string eval_gt_depth_dir = result_path + "/eval/gt/depth";
+    // std::string eval_render_rgb_dir = result_path + "/eval/renders/rgb";
+    // std::string eval_render_depth_dir = result_path + "/eval/renders/depth";
+    // std::string eval_render_alpha_dir = result_path + "/eval/renders/alpha";
+    // fs::create_directories(eval_gt_rgb_dir);
+    // fs::create_directories(eval_gt_depth_dir);
+    // fs::create_directories(eval_render_rgb_dir);
+    // fs::create_directories(eval_render_depth_dir);
+    // fs::create_directories(eval_render_alpha_dir);
 
     torch::Tensor bg;
     if (pc->white_background_) bg = torch::ones({3}, torch::kFloat32).cuda();
@@ -1121,7 +1116,6 @@ VisualQualityMetrics evaluateVisualQuality(const std::shared_ptr<Dataset>& datas
                 auto render_pkg = render(camera, pc, bg, pc->apply_exposure_);
                 auto rendered_image = std::get<0>(render_pkg).clamp(0, 1);
                 auto rendered_depth = std::get<1>(render_pkg);
-                auto rendered_final_T = std::get<2>(render_pkg);
                 auto gt_image = camera->original_image_.cuda().clamp(0, 1);
                 double psnr = loss_utils::psnr(rendered_image, gt_image).mean().item<double>();
                 double ssim = loss_utils::ssim(rendered_image, gt_image).item<double>();
@@ -1134,17 +1128,19 @@ VisualQualityMetrics evaluateVisualQuality(const std::shared_ptr<Dataset>& datas
                 accum.lpipss += lpips;
                 accum.rgb_n += 1;
 
-                const int frame_idx = frameIndexFromImageName(camera->image_name_);
-                const std::string stem = evalStem(frame_idx);
                 saveRgbPng(rendered_image, render_dir_path + "/" + camera->image_name_);
                 saveRgbPng(gt_image, gt_dir_path + "/" + camera->image_name_);
-                saveRgbPng(rendered_image, eval_render_rgb_dir + "/" + stem + ".png");
-                saveRgbPng(gt_image, eval_gt_rgb_dir + "/" + stem + ".png");
-                saveFloatTiff(rendered_depth, eval_render_depth_dir + "/" + stem + ".tiff");
-                saveFloatTiff(camera->original_depth_, eval_gt_depth_dir + "/" + stem + ".tiff");
-                saveFloatTiff((torch::ones_like(rendered_final_T) - rendered_final_T).clamp(0, 1),
-                              eval_render_alpha_dir + "/" + stem + ".tiff");
                 saveDepthPreviewPng(rendered_depth, render_depth_dir_path + "/" + camera->image_name_);
+
+                // Saving rendered and GT images to JetFast eval dir, deprecated
+                // const int frame_idx = frameIndexFromImageName(camera->image_name_);
+                // const std::string stem = evalStem(frame_idx);
+                // saveRgbPng(rendered_image, eval_render_rgb_dir + "/" + stem + ".png");
+                // saveRgbPng(gt_image, eval_gt_rgb_dir + "/" + stem + ".png");
+                // saveFloatTiff(rendered_depth, eval_render_depth_dir + "/" + stem + ".tiff");
+                // saveFloatTiff(camera->original_depth_, eval_gt_depth_dir + "/" + stem + ".tiff");
+                // saveFloatTiff((torch::ones_like(rendered_final_T) - rendered_final_T).clamp(0, 1),
+                //               eval_render_alpha_dir + "/" + stem + ".tiff");
             }
             std::cout << std::fixed << std::setprecision(2)
                       << "        [" << name << " PSNR] " << average(accum.psnrs, accum.rgb_n) << std::endl;
@@ -1229,7 +1225,8 @@ void saveFrameSequence(const std::shared_ptr<Dataset>& dataset,
     std::cout << "[saveFrameSequence] Saved " << all_cams.size()
               << " cameras to " << json_path << std::endl;
 
-    std::string eval_dir = result_path + "/eval";
+    // Everything JetFast needs to render and score this scene
+    std::string eval_dir = result_path + "/jetfast_eval";
     fs::create_directories(eval_dir);
 
     std::map<std::string, int> camera_ids;
